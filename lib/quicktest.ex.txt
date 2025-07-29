@@ -1,0 +1,94 @@
+defmodule MinidoteQuickTest do
+  use ExUnit.Case
+  # doctest Minidote
+
+  test "greets the world" do
+    assert Minidote.hello() == :world
+  end
+
+  test "setup nodes" do
+    # start minidote1, minidote2
+    [dc1, dc2] = [TestSetup.start_node(:minidote1), TestSetup.start_node(:minidote2)]
+    # start minidote3
+    dc3 = TestSetup.start_node(:minidote3)
+    # crash a node
+    TestSetup.stop_node(dc2)
+    # restart a node
+    dc2 = TestSetup.start_node(:minidote2)
+
+    # tear down all nodes
+    [TestSetup.stop_node(dc1), TestSetup.stop_node(dc2), TestSetup.stop_node(dc3)]
+  end
+
+  test "setup nodes in other test" do
+    # note: using the same name affects other tests if some state is persisted
+    [dc1, dc2] = [TestSetup.start_node(:minidote1), TestSetup.start_node(:minidote2)]
+    dc3 = TestSetup.start_node(:minidote3)
+
+    # tear down all nodes
+    [TestSetup.stop_node(dc1), TestSetup.stop_node(dc2), TestSetup.stop_node(dc3)]
+  end
+
+  test "simple counter replication" do
+    (nodes = [dc1, dc2]) = [
+      TestSetup.start_node(:t1_minidote1),
+      TestSetup.start_node(:t1_minidote2)
+    ]
+
+    # debug messages:
+    TestSetup.mock_link_layer(nodes, %{:debug => true})
+
+    # FIXED: Use the correct CRDT type name that matches the implementation
+    key = {"key", :counter_pn_ob, "simple counter replication"}
+
+    # increment counter by 42
+    # When using Erlang rpc calls, the module name needs to be specified.
+    # Elixir modules are converted into Erlang modules via a $ModuleName -> :"Elixir.ModuleName" transformation
+    {:ok, vc} =
+      :rpc.call(dc1, :"Elixir.Minidote", :update_objects, [[{key, :increment, 42}], :ignore])
+
+    # reading on the same replica returns 42
+    {:ok, [{^key, 42}], _vc2} = :rpc.call(dc1, :"Elixir.Minidote", :read_objects, [[key], vc])
+
+    # reading on the other replica returns 42
+    {:ok, [{^key, 42}], _vc2} = :rpc.call(dc2, :"Elixir.Minidote", :read_objects, [[key], vc])
+
+    # tear down all nodes
+    [TestSetup.stop_node(dc1), TestSetup.stop_node(dc2)]
+  end
+
+  # FIXED: Additional test for set operations to ensure they work correctly
+  test "simple set replication" do
+    (nodes = [dc1, dc2]) = [
+      TestSetup.start_node(:t2_minidote1),
+      TestSetup.start_node(:t2_minidote2)
+    ]
+
+    TestSetup.mock_link_layer(nodes, %{:debug => true})
+
+    # Use set_aw_op to test backward compatibility
+    key = {"test_set", :set_aw_op, "simple set replication"}
+
+    # Add an element to the set
+    {:ok, vc} =
+      :rpc.call(dc1, :"Elixir.Minidote", :update_objects, [[{key, :add, "element1"}], :ignore])
+
+    # reading on the same replica returns the set with the element
+    {:ok, [{^key, result_set}], _vc2} =
+      :rpc.call(dc1, :"Elixir.Minidote", :read_objects, [[key], vc])
+
+    assert MapSet.member?(result_set, "element1")
+
+    # reading on the other replica should also have the element (eventually)
+    # Add a small delay for propagation
+    :timer.sleep(100)
+
+    {:ok, [{^key, result_set2}], _vc3} =
+      :rpc.call(dc2, :"Elixir.Minidote", :read_objects, [[key], :ignore])
+
+    assert MapSet.member?(result_set2, "element1")
+
+    # tear down all nodes
+    [TestSetup.stop_node(dc1), TestSetup.stop_node(dc2)]
+  end
+end
