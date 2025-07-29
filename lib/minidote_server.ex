@@ -1,23 +1,24 @@
-defmodule Minidote.Server do
+defmodule DistributedDataStore.Service do
   use GenServer
   require Logger
+  require ConflictFreeReplicatedDataType
 
   @moduledoc """
-  The API documentation for `Minidote.Server`.
-  A simple key-value store that works with CausalBroadcast and CRDTs.
+  The API documentation for `DistributedDataStore.Service`.
+  A distributed key-value store that works with CausalBroadcast and CRDTs.
   """
 
   # Public API
-  def start_link(server_name) do
-    GenServer.start_link(__MODULE__, [], name: server_name)
+  def start_link(service_name) do
+    GenServer.start_link(__MODULE__, [], name: service_name)
   end
 
-  def read(server, key) do
-    GenServer.call(server, {:read, key})
+  def retrieve(service, key) do
+    GenServer.call(service, {:retrieve, key})
   end
 
-  def write(server, key, value) do
-    GenServer.call(server, {:write, key, value})
+  def store(service, key, value) do
+    GenServer.call(service, {:store, key, value})
   end
 
   # GenServer Callbacks
@@ -37,31 +38,31 @@ defmodule Minidote.Server do
       waiting_requests: []
     }
 
-    Logger.info("Minidote server started")
+    Logger.info("Distributed data store service initiated")
     {:ok, initial_state}
   end
 
   # Handle CRDT read_objects requests
   @impl true
-  def handle_call({:read_objects, objects, client_clock}, from, state) do
+  def handle_call({:retrieve_data_items, objects, client_clock}, from, state) do
     # Check session guarantees
     if client_clock == :ignore or Vector_Clock.leq(client_clock, state.clock) do
       # Session guarantee satisfied, process immediately
       results =
         Enum.map(objects, fn {_key, crdt_type_atom, _bucket} = full_key ->
           # Convert atom to actual CRDT module
-          crdt_type = Minidote.get_crdt_module(crdt_type_atom)
+          crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
 
           case Map.get(state.db, full_key) do
             nil ->
               # Object doesn't exist, create empty CRDT
-              empty_crdt = CRDT.new(crdt_type)
-              value = CRDT.value(crdt_type, empty_crdt)
+              empty_crdt = ConflictFreeReplicatedDataType.create_new(crdt_type)
+              value = ConflictFreeReplicatedDataType.get_current_value(crdt_type, empty_crdt)
               {full_key, value}
 
             crdt_state ->
               # Object exists, get its value
-              value = CRDT.value(crdt_type, crdt_state)
+              value = ConflictFreeReplicatedDataType.get_current_value(crdt_type, crdt_state)
               {full_key, value}
           end
         end)
@@ -69,44 +70,44 @@ defmodule Minidote.Server do
       {:reply, {:ok, results, state.clock}, state}
     else
       # Session guarantee not met, queue the request
-      new_waiting = [{:read_objects, objects, client_clock, from} | state.waiting_requests]
+      new_waiting = [{:retrieve_data_items, objects, client_clock, from} | state.waiting_requests]
       {:noreply, %{state | waiting_requests: new_waiting}}
     end
   end
 
   # Handle CRDT update_objects requests
   @impl true
-  def handle_call({:update_objects, updates, client_clock}, from, state) do
+  def handle_call({:modify_data_items, updates, client_clock}, from, state) do
     # Check session guarantees
     if client_clock == :ignore or Vector_Clock.leq(client_clock, state.clock) do
       # Session guarantee satisfied, process immediately
-      process_update_objects(updates, state, from)
+      process_item_modifications(updates, state, from)
     else
       # Session guarantee not met, queue the request
-      new_waiting = [{:update_objects, updates, client_clock, from} | state.waiting_requests]
+      new_waiting = [{:modify_data_items, updates, client_clock, from} | state.waiting_requests]
       {:noreply, %{state | waiting_requests: new_waiting}}
     end
   end
 
   # Handle read requests (original simple API)
   @impl true
-  def handle_call({:read, key}, _from, state) do
+  def handle_call({:retrieve, key}, _from, state) do
     value = Map.get(state.db, key, :not_found)
-    Logger.debug("Read key=#{key}, value=#{inspect(value)}")
+    Logger.debug("Retrieved key=#{key}, value=#{inspect(value)}")
     {:reply, {:ok, value}, state}
   end
 
-  # Handle write requests (original simple API)
+  # Handle store requests (original simple API)
   @impl true
-  def handle_call({:write, key, value}, _from, state) do
+  def handle_call({:store, key, value}, _from, state) do
     # Update local database
     new_db = Map.put(state.db, key, value)
     new_state = %{state | db: new_db}
 
     # Broadcast the change to other nodes
-    CausalBroadcast.broadcast({:write, key, value})
+    CausalBroadcast.broadcast({:store, key, value})
 
-    Logger.debug("Write key=#{key}, value=#{inspect(value)}")
+    Logger.debug("Stored key=#{key}, value=#{inspect(value)}")
     {:reply, :ok, new_state}
   end
 
@@ -125,10 +126,10 @@ defmodule Minidote.Server do
         state
       ) do
     # Get current CRDT state or create new one
-    current_crdt = Map.get(state.db, full_key, CRDT.new(crdt_type))
+    current_crdt = Map.get(state.db, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
 
     # Apply the remote effect
-    case CRDT.update(crdt_type, {effect, sender_node}, current_crdt) do
+    case ConflictFreeReplicatedDataType.apply_propagation_effect(crdt_type, {effect, sender_node}, current_crdt) do
       {:ok, new_crdt} ->
         # Update database and merge clocks
         new_db = Map.put(state.db, full_key, new_crdt)
@@ -154,9 +155,9 @@ defmodule Minidote.Server do
         state
       ) do
     # Assume crdt_type is already the module (backward compatibility)
-    current_crdt = Map.get(state.db, full_key, CRDT.new(crdt_type))
+    current_crdt = Map.get(state.db, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
 
-    case CRDT.update(crdt_type, {effect, sender_node}, current_crdt) do
+    case ConflictFreeReplicatedDataType.apply_propagation_effect(crdt_type, {effect, sender_node}, current_crdt) do
       {:ok, new_crdt} ->
         new_db = Map.put(state.db, full_key, new_crdt)
         new_clock = Vector_Clock.merge(state.clock, sender_clock)
@@ -175,12 +176,12 @@ defmodule Minidote.Server do
 
   # Handle writes delivered from other nodes via CausalBroadcast (original simple API)
   @impl true
-  def handle_info({:deliver, {:write, key, value}}, state) do
-    # Apply the remote write to our database
+  def handle_info({:deliver, {:store, key, value}}, state) do
+    # Apply the remote store to our database
     new_db = Map.put(state.db, key, value)
     new_state = %{state | db: new_db}
 
-    Logger.debug("Applied remote write: key=#{key}, value=#{inspect(value)}")
+    Logger.debug("Applied remote store: key=#{key}, value=#{inspect(value)}")
     {:noreply, new_state}
   end
 
@@ -193,28 +194,28 @@ defmodule Minidote.Server do
   # Private helper functions
 
   # Process update_objects request
-  defp process_update_objects(updates, state, from) do
+  defp process_item_modifications(modifications, state, from) do
     # Increment local clock for this update operation
     new_clock = Vector_Clock.increment(state.clock, node())
 
     # Process each update atomically
     {new_db, effects} =
-      Enum.reduce(updates, {state.db, []}, fn {{_key, crdt_type_atom, _bucket} = full_key,
-                                               operation, args},
-                                              {db_acc, effects_acc} ->
+      Enum.reduce(modifications, {state.db, []}, fn {{_key, crdt_type_atom, _bucket} = full_key,
+                                                       operation, args},
+                                                      {db_acc, effects_acc} ->
         # Convert atom to actual CRDT module
-        crdt_type = Minidote.get_crdt_module(crdt_type_atom)
+        crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
 
         # Get current CRDT state or create new one
-        current_crdt = Map.get(db_acc, full_key, CRDT.new(crdt_type))
+        current_crdt = Map.get(db_acc, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
 
         # Create the update operation
         update_op = {operation, args}
 
         # Apply the operation
-        case CRDT.downstream(crdt_type, update_op, current_crdt) do
+        case ConflictFreeReplicatedDataType.compute_propagation_effect(crdt_type, update_op, current_crdt) do
           {:ok, effect} ->
-            case CRDT.update(crdt_type, {effect, node()}, current_crdt) do
+            case ConflictFreeReplicatedDataType.apply_propagation_effect(crdt_type, {effect, node()}, current_crdt) do
               {:ok, new_crdt} ->
                 # Update database locally
                 new_db = Map.put(db_acc, full_key, new_crdt)
@@ -263,19 +264,19 @@ defmodule Minidote.Server do
       Enum.reduce(ready_requests, %{state | waiting_requests: still_waiting}, fn request,
                                                                                  acc_state ->
         case request do
-          {:read_objects, objects, _client_clock, from} ->
+          {:retrieve_data_items, objects, _client_clock, from} ->
             results =
               Enum.map(objects, fn {_key, crdt_type_atom, _bucket} = full_key ->
-                crdt_type = Minidote.get_crdt_module(crdt_type_atom)
+                crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
 
                 case Map.get(acc_state.db, full_key) do
                   nil ->
-                    empty_crdt = CRDT.new(crdt_type)
-                    value = CRDT.value(crdt_type, empty_crdt)
+                    empty_crdt = ConflictFreeReplicatedDataType.create_new(crdt_type)
+                    value = ConflictFreeReplicatedDataType.get_current_value(crdt_type, empty_crdt)
                     {full_key, value}
 
                   crdt_state ->
-                    value = CRDT.value(crdt_type, crdt_state)
+                    value = ConflictFreeReplicatedDataType.get_current_value(crdt_type, crdt_state)
                     {full_key, value}
                 end
               end)
@@ -283,9 +284,9 @@ defmodule Minidote.Server do
             GenServer.reply(from, {:ok, results, acc_state.clock})
             acc_state
 
-          {:update_objects, updates, _client_clock, from} ->
-            # Process the update (this will handle the reply internally)
-            {:noreply, new_state} = process_update_objects(updates, acc_state, from)
+          {:modify_data_items, updates, _client_clock, from} ->
+            # Process the modification (this will handle the reply internally)
+            {:noreply, new_state} = process_item_modifications(updates, acc_state, from)
             new_state
         end
       end)
@@ -295,50 +296,50 @@ defmodule Minidote.Server do
 end
 
 # Simple example
-defmodule Minidote.Example do
-  def demo do
-    # Start server
-    {:ok, _pid} = Minidote.Server.start_link(:my_server)
+defmodule DistributedDataStore.SampleUsage do
+  def demonstration do
+    # Start service
+    {:ok, _process_id} = DistributedDataStore.Service.start_link(:my_service)
 
-    # Write some data
-    :ok = Minidote.Server.write(:my_server, "name", "Alice")
+    # Store some information
+    :ok = DistributedDataStore.Service.store(:my_service, "entity_name", "Bob")
 
-    # Read it back
-    {:ok, value} = Minidote.Server.read(:my_server, "name")
-    IO.puts("Read: #{value}")
+    # Retrieve it
+    {:ok, retrieved_value} = DistributedDataStore.Service.retrieve(:my_service, "entity_name")
+    IO.puts("Retrieved: #{retrieved_value}")
   end
 
-  def crdt_demo do
-    # Example using the CRDT API directly through the server
-    # This assumes the Minidote.Server is registered as Minidote.Server
-    clock = Vector_Clock.new()
+  def crdt_sample do
+    # Example using the CRDT API directly through the service
+    # This assumes the DistributedDataStore.Service is registered as DistributedDataStore.Service
+    version_token = Vector_Clock.new()
 
-    # Create a set key - use the atom representation
-    set_key = {"my_set", :set_aw_op, "my_bucket"}
+    # Define a set key - use the atom representation
+    set_identifier = {"my_unique_set", :set_aw_op, "my_specific_domain"}
 
-    # Add some elements using GenServer.call directly
+    # Perform modifications using GenServer.call directly
     case GenServer.call(
-           Minidote.Server,
-           {:update_objects,
+           DistributedDataStore.Service,
+           {:modify_data_items,
             [
-              {set_key, :add, {"element1", :tag1}}
-            ], clock}
+              {set_identifier, :add_element, {"component_A", :marker1}}
+            ], version_token}
          ) do
-      {:ok, new_clock} ->
-        # Read the set
-        case GenServer.call(Minidote.Server, {:read_objects, [set_key], new_clock}) do
-          {:ok, results, _read_clock} ->
-            IO.inspect(results, label: "Set contents")
+      {:ok, updated_token} ->
+        # Retrieve the set
+        case GenServer.call(DistributedDataStore.Service, {:retrieve_data_items, [set_identifier], updated_token}) do
+          {:ok, results_data, _retrieval_token} ->
+            IO.inspect(results_data, label: "Set contents")
             :ok
 
-          {:error, reason} ->
-            IO.puts("Failed to read objects: #{inspect(reason)}")
-            {:error, reason}
+          {:error, issue} ->
+            IO.puts("Failed to retrieve data items: #{inspect(issue)}")
+            {:error, issue}
         end
 
-      {:error, reason} ->
-        IO.puts("Failed to update objects: #{inspect(reason)}")
-        {:error, reason}
+      {:error, issue} ->
+        IO.puts("Failed to modify data items: #{inspect(issue)}")
+        {:error, issue}
     end
   end
 end

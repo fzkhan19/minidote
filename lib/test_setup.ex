@@ -29,8 +29,8 @@ defmodule TestSetup do
     rpc.(Application, :ensure_all_started, [:logger])
     rpc.(Logger, :configure, [[level: Logger.level()]])
     rpc.(Mix, :env, [Mix.env()])
-    Logger.notice("Starting minidote on node: #{inspect node}")
-    rpc.(Application, :ensure_all_started, [:minidote])
+    Logger.notice("Starting distributed_data_store on node: #{inspect node}")
+    rpc.(Application, :ensure_all_started, [:distributed_data_store])
 
     node
   end
@@ -38,8 +38,8 @@ defmodule TestSetup do
   # # helper function to start multiple nodes at once, uncomment if needed
   # @spec start(integer()) :: list()
   # def start(num_nodes) do
-  #   Logger.notice("Booting #{num_nodes} distributed nodes with prefix :minidote")
-  #   name = :minidote
+  #   Logger.notice("Booting #{num_nodes} distributed nodes with prefix :distributed_data_store")
+  #   name = :distributed_data_store
   #   cookie = :erlang.get_cookie()
   #   nodes = Enum.map(1..num_nodes, fn i ->
   #       {:ok, name} =

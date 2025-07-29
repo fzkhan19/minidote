@@ -19,7 +19,7 @@ defmodule CausalBroadcast do
     owner_pid = Keyword.get(opts, :owner, self())
 
     # Start the link layer to connect to other nodes
-    {:ok, link_layer_pid} = LinkLayer.start_link(:minidote)
+    {:ok, link_layer_pid} = LinkLayer.start_link(:distributed_data_store)
 
     # Register self to receive messages from the link layer
     LinkLayer.register(link_layer_pid, self())
@@ -60,7 +60,7 @@ defmodule CausalBroadcast do
         Logger.warning("Failed to get other nodes for broadcast")
     end
 
-    
+
 
     # Update state
     {:noreply, %{state | vector_clock: new_clock}}

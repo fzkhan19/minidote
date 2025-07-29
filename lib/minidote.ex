@@ -1,161 +1,161 @@
-defmodule Minidote do
+defmodule DistributedDataStore do
   require Logger
-  require CRDT
+  require ConflictFreeReplicatedDataType
 
   @moduledoc """
-  Documentation for `Minidote`.
+  Documentation for `DistributedDataStore`.
 
-  Minidote is a causally consistent CRDT database that provides a key-value store
+  DistributedDataStore is a causally consistent CRDT database that provides a key-value store
   where each key is a 3-tuple consisting of:
   - Key: binary() - the main identifier
-  - Type: CRDT.t() - the CRDT type (e.g., Counter_PN_OB, Set_AW_OB)
+  - Type: ConflictFreeReplicatedDataType.crdt_type_definition() - the CRDT type (e.g., Counter_PN_OB, Set_AW_OB)
   - Bucket: binary() - the namespace
 
   The API provides two main functions:
-  - read_objects/2: Read multiple objects atomically
-  - update_objects/2: Update multiple objects atomically
+  - retrieve_data_items/2: Retrieve multiple objects atomically
+  - modify_data_items/2: Modify multiple objects atomically
 
-  Both functions support session guarantees through vector clocks.
+  Both functions support session guarantees through version tokens.
   """
 
-  @type key :: {binary(), CRDT.t(), binary()}
-  @type clock :: map() | :ignore
-  @type value :: any()
-  @type operation :: atom()
-  @type args :: any()
+  @type data_key :: {binary(), ConflictFreeReplicatedDataType.crdt_type_definition(), binary()}
+  @type version_token :: map() | :ignore
+  @type item_value :: any()
+  @type item_operation :: atom()
+  @type operation_args :: any()
 
   @doc """
-  Simple hello function for basic testing.
+  Simple ping function for basic testing.
   """
-  def hello do
+  def ping do
     :world
   end
 
-  def start_link(server_name) do
-    Minidote.Server.start_link(server_name)
+  def start_service_link(service_name) do
+    DistributedDataStore.Service.start_link(service_name)
   end
 
   @doc """
-  Read multiple objects from the database.
+  Retrieve multiple objects from the database.
 
   Parameters:
-  - objects: List of keys to read
-  - clock: Vector clock for session guarantees, or :ignore
+  - data_items: List of keys to retrieve
+  - version_token: Version token for session guarantees, or :ignore
 
   Returns:
-  - {:ok, results, new_clock} where results is a list of {key, value} tuples
+  - {:ok, results, new_version_token} where results is a list of {data_key, item_value} tuples
   - {:error, reason} on failure
 
-  If a key doesn't exist, the initial value for the CRDT type is returned.
-  The clock parameter ensures session guarantees - if provided from a previous
-  operation, this read will observe a state at least as recent as that operation.
+  If a data_key doesn't exist, the initial value for the CRDT type is returned.
+  The version_token parameter ensures session guarantees - if provided from a previous
+  operation, this retrieval will observe a state at least as recent as that operation.
   """
-  @spec read_objects([key()], clock()) ::
-          {:ok, [{key(), value()}], clock()} | {:error, any()}
-  def read_objects(objects, clock) do
-    Logger.notice("#{node()}: read_objects(#{inspect(objects)}, #{inspect(clock)})")
+  @spec retrieve_data_items([data_key()], version_token()) ::
+          {:ok, [{data_key(), item_value()}], version_token()} | {:error, any()}
+  def retrieve_data_items(data_items, version_token) do
+    Logger.notice("#{node()}: retrieve_data_items(#{inspect(data_items)}, #{inspect(version_token)})")
 
     # Validate input
-    case validate_keys(objects) do
+    case validate_data_keys(data_items) do
       :ok ->
         # Forward the call to the named GenServer
-        GenServer.call(Minidote.Server, {:read_objects, objects, clock})
+        GenServer.call(DistributedDataStore.Service, {:retrieve_data_items, data_items, version_token})
 
       {:error, reason} ->
-        Logger.warning("#{node()}: Invalid keys in read_objects: #{inspect(reason)}")
+        Logger.warning("#{node()}: Invalid data keys in retrieve_data_items: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
   @doc """
-  Update multiple objects atomically.
+  Modify multiple objects atomically.
 
   Parameters:
-  - updates: List of {key, operation, args} tuples
-  - clock: Vector clock for session guarantees, or :ignore
+  - modifications: List of {data_key, item_operation, operation_args} tuples
+  - version_token: Version token for session guarantees, or :ignore
 
   Returns:
-  - {:ok, new_clock} on success
+  - {:ok, new_version_token} on success
   - {:error, reason} on failure
 
-  All updates are applied atomically. If multiple updates target the same key,
+  All modifications are applied atomically. If multiple modifications target the same data_key,
   they are applied sequentially from left to right.
-  The clock parameter ensures session guarantees - if provided from a previous
-  operation, this update will be applied on a state at least as recent as that operation.
+  The version_token parameter ensures session guarantees - if provided from a previous
+  operation, this modification will be applied on a state at least as recent as that operation.
   """
-  @spec update_objects([{key(), operation(), args()}], clock()) ::
-          {:ok, clock()} | {:error, any()}
-  def update_objects(updates, clock) do
-    Logger.notice("#{node()}: update_objects(#{inspect(updates)}, #{inspect(clock)})")
+  @spec modify_data_items([{data_key(), item_operation(), operation_args()}], version_token()) ::
+          {:ok, version_token()} | {:error, any()}
+  def modify_data_items(modifications, version_token) do
+    Logger.notice("#{node()}: modify_data_items(#{inspect(modifications)}, #{inspect(version_token)})")
 
     # Validate input
-    case validate_updates(updates) do
+    case validate_item_modifications(modifications) do
       :ok ->
         # Forward the call to the named GenServer
-        GenServer.call(Minidote.Server, {:update_objects, updates, clock})
+        GenServer.call(DistributedDataStore.Service, {:modify_data_items, modifications, version_token})
 
       {:error, reason} ->
-        Logger.warning("#{node()}: Invalid updates in update_objects: #{inspect(reason)}")
+        Logger.warning("#{node()}: Invalid modifications in modify_data_items: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
   # Private helper functions for input validation
 
-  defp validate_keys(objects) when is_list(objects) do
-    case Enum.all?(objects, &valid_key?/1) do
+  defp validate_data_keys(data_items) when is_list(data_items) do
+    case Enum.all?(data_items, &is_valid_data_key?/1) do
       true -> :ok
-      false -> {:error, :invalid_key_format}
+      false -> {:error, :invalid_data_key_format}
     end
   end
 
-  defp validate_keys(_), do: {:error, :keys_not_list}
+  defp validate_data_keys(_), do: {:error, :data_keys_not_list}
 
-  defp validate_updates(updates) when is_list(updates) do
-    case Enum.all?(updates, &valid_update?/1) do
+  defp validate_item_modifications(modifications) when is_list(modifications) do
+    case Enum.all?(modifications, &is_valid_modification?/1) do
       true -> :ok
-      false -> {:error, :invalid_update_format}
+      false -> {:error, :invalid_modification_format}
     end
   end
 
-  defp validate_updates(_), do: {:error, :updates_not_list}
+  defp validate_item_modifications(_), do: {:error, :modifications_not_list}
 
-  defp valid_key?({key, type, bucket})
+  defp is_valid_data_key?({key, type, bucket})
        when is_binary(key) and is_atom(type) and is_binary(bucket) do
     # Convert atom type to module and check if it's valid
-    case atom_to_crdt_module(type) do
-      {:ok, module} -> CRDT.valid?(module)
+    case type_atom_to_crdt_impl(type) do
+      {:ok, module} -> ConflictFreeReplicatedDataType.is_supported?(module)
       :error -> false
     end
   end
 
-  defp valid_key?(_), do: false
+  defp is_valid_data_key?(_), do: false
 
-  defp valid_update?({{key, type, bucket}, operation, _args})
+  defp is_valid_modification?({{key, type, bucket}, operation, _args})
        when is_binary(key) and is_atom(type) and is_binary(bucket) and is_atom(operation) do
     # Convert atom type to module and check if it's valid
-    case atom_to_crdt_module(type) do
-      {:ok, module} -> CRDT.valid?(module)
+    case type_atom_to_crdt_impl(type) do
+      {:ok, module} -> ConflictFreeReplicatedDataType.is_supported?(module)
       :error -> false
     end
   end
 
-  defp valid_update?(_), do: false
+  defp is_valid_modification?(_), do: false
 
   # Map atom representations to actual CRDT modules
-  defp atom_to_crdt_module(:counter_pn_ob), do: {:ok, Counter_PN_OB}
+  defp type_atom_to_crdt_impl(:counter_pn_ob), do: {:ok, PositiveNegativeCounter}
   # Fixed naming
-  defp atom_to_crdt_module(:set_aw_ob), do: {:ok, Set_AW_OB}
+  defp type_atom_to_crdt_impl(:set_aw_ob), do: {:ok, Set_AW_OB}
   # Support both variants
-  defp atom_to_crdt_module(:set_aw_op), do: {:ok, Set_AW_OB}
+  defp type_atom_to_crdt_impl(:set_aw_op), do: {:ok, Set_AW_OB}
   # Add more mappings as you implement more CRDTs
-  # defp atom_to_crdt_module(:counter_pn_sb), do: {:ok, Counter_PN_SB}
-  # defp atom_to_crdt_module(:mvregister_sb), do: {:ok, MVRegister_SB}
-  defp atom_to_crdt_module(_), do: :error
+  # defp type_atom_to_crdt_impl(:counter_pn_sb), do: {:ok, Counter_PN_SB}
+  # defp type_atom_to_crdt_impl(:mvregister_sb), do: {:ok, MVRegister_SB}
+  defp type_atom_to_crdt_impl(_), do: :error
 
   # Helper function to get the actual CRDT module from atom type
-  def get_crdt_module(type_atom) do
-    case atom_to_crdt_module(type_atom) do
+  def get_crdt_implementation(type_atom) do
+    case type_atom_to_crdt_impl(type_atom) do
       {:ok, module} -> module
       :error -> raise ArgumentError, "Unknown CRDT type: #{inspect(type_atom)}"
     end

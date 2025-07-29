@@ -1,70 +1,47 @@
-defmodule Counter_PN_OB do
-  @behaviour CRDT
+defmodule PositiveNegativeCounter do
+  @behaviour ConflictFreeReplicatedDataType
 
   @moduledoc """
   An operation-based PN-Counter CRDT.
   This implementation uses two vector clocks, one for increments (P) and one for decrements (N).
   """
 
-  @type t :: {map, map}
+  @type internal_state :: {map, map}
 
-  def new() do
+  def initialize() do
     {%{}, %{}}
   end
 
-  def value({p_vc, n_vc}) do
-    p_sum = Enum.reduce(p_vc, 0, fn {_, count}, acc -> acc + count end)
-    n_sum = Enum.reduce(n_vc, 0, fn {_, count}, acc -> acc + count end)
-    p_sum - n_sum
+  def retrieve_value({positive_vc, negative_vc}) do
+    positive_sum = Enum.reduce(positive_vc, 0, fn {_, count}, acc -> acc + count end)
+    negative_sum = Enum.reduce(negative_vc, 0, fn {_, count}, acc -> acc + count end)
+    positive_sum - negative_sum
   end
 
-  def downstream({:increment, amount}, _state) do
-    {:ok, {:inc, amount}}
+  def generate_effect({:increment, value}, _state) do
+    {:ok, {:inc_effect, value}}
   end
 
-  def downstream({:decrement, amount}, _state) do
-    {:ok, {:dec, amount}}
+  def generate_effect({:decrement, value}, _state) do
+    {:ok, {:dec_effect, value}}
   end
 
-  def update({{:inc, amount}, node}, {p_vc, n_vc}) do
-    new_p_vc = Enum.reduce(1..amount, p_vc, fn _, acc -> Vector_Clock.increment(acc, node) end)
-    {:ok, {new_p_vc, n_vc}}
+  def apply_effect({{:inc_effect, value}, node_id}, {positive_vc, negative_vc}) do
+    updated_positive_vc = Enum.reduce(1..value, positive_vc, fn _, acc -> Vector_Clock.increment(acc, node_id) end)
+    {:ok, {updated_positive_vc, negative_vc}}
   end
 
-  def update({{:dec, amount}, node}, {p_vc, n_vc}) do
-    new_n_vc = Enum.reduce(1..amount, n_vc, fn _, acc -> Vector_Clock.increment(acc, node) end)
-    {:ok, {p_vc, new_n_vc}}
+  def apply_effect({{:dec_effect, value}, node_id}, {positive_vc, negative_vc}) do
+    updated_negative_vc = Enum.reduce(1..value, negative_vc, fn _, acc -> Vector_Clock.increment(acc, node_id) end)
+    {:ok, {positive_vc, updated_negative_vc}}
   end
 
-  def require_state_downstream(_update) do
+  def requires_state_for_effect(_operation_payload) do
     false
   end
 
-  def equal(state1, state2) do
-    state1 == state2
+  def are_equal(state_a, state_b) do
+    state_a == state_b
   end
 
-  def update({:inc, amount}, {p_vc, n_vc}) do
-    # Use current node when not provided
-    node = node()
-    new_p_vc = Enum.reduce(1..amount, p_vc, fn _, acc -> Vector_Clock.increment(acc, node) end)
-    {:ok, {new_p_vc, n_vc}}
-  end
-
-  def update({:dec, amount}, {p_vc, n_vc}) do
-    node = node()
-    new_n_vc = Enum.reduce(1..amount, n_vc, fn _, acc -> Vector_Clock.increment(acc, node) end)
-    {:ok, {p_vc, new_n_vc}}
-  end
-
-  # Keep existing functions for distributed operations
-  def update({{:inc, amount}, node}, {p_vc, n_vc}) do
-    new_p_vc = Enum.reduce(1..amount, p_vc, fn _, acc -> Vector_Clock.increment(acc, node) end)
-    {:ok, {new_p_vc, n_vc}}
-  end
-
-  def update({{:dec, amount}, node}, {p_vc, n_vc}) do
-    new_n_vc = Enum.reduce(1..amount, n_vc, fn _, acc -> Vector_Clock.increment(acc, node) end)
-    {:ok, {p_vc, new_n_vc}}
-  end
 end

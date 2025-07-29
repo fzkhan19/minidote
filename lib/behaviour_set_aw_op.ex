@@ -1,85 +1,85 @@
-defmodule Set_AW_OB do
-  @behaviour CRDT
+defmodule AddWinsSet do
+  @behaviour ConflictFreeReplicatedDataType
 
   @moduledoc """
   An operation-based Add-Wins Observed-Remove Set CRDT.
   """
 
-  @type t :: map()
+  @type internal_state :: map()
 
-  def new() do
+  def initialize() do
     %{}
   end
 
-  def value(state) do
-    Map.keys(state) |> MapSet.new()
+  def retrieve_value(current_state) do
+    Map.keys(current_state) |> MapSet.new()
   end
 
-  def downstream({:add, element}, _state) do
-    {:ok, {:add, element}}
+  def generate_effect({:add_element, item_to_add}, _current_state) do
+    {:ok, {:add_effect, item_to_add}}
   end
 
-  def downstream({:remove, element}, state) do
-    if Map.has_key?(state, element) do
-      {:ok, {:rm, {element, Map.get(state, element)}}}
+  def generate_effect({:remove_element, item_to_remove}, current_state) do
+    if Map.has_key?(current_state, item_to_remove) do
+      {:ok, {:remove_effect, {item_to_remove, Map.get(current_state, item_to_remove)}}}
     else
-      {:error, :element_not_found}
+      {:error, :item_not_found}
     end
   end
 
   # Handle updates with explicit node information
-  def update({{:add, element}, node}, state) do
-    vc = Map.get(state, element, Vector_Clock.new())
-    {:ok, Map.put(state, element, Vector_Clock.increment(vc, node))}
+  def apply_effect({{:add_effect, item}, node_id}, current_state) do
+    version_clock = Map.get(current_state, item, Vector_Clock.new())
+    {:ok, Map.put(current_state, item, Vector_Clock.increment(version_clock, node_id))}
   end
 
-  def update({{:rm, {element, remove_vc}}, _node}, state) do
-    case Map.get(state, element) do
+  def apply_effect({{:remove_effect, {item, removal_vc}}, _node_id}, current_state) do
+    case Map.get(current_state, item) do
       nil ->
-        # Element not present
-        {:ok, state}
+        # Item not present
+        {:ok, current_state}
 
-      element_vc ->
-        # Remove only if remove_vc dominates element_vc (causally after)
-        if Vector_Clock.leq(element_vc, remove_vc) do
-          {:ok, Map.delete(state, element)}
+      item_version_clock ->
+        # Remove only if removal_vc dominates item_version_clock (causally after)
+        if Vector_Clock.leq(item_version_clock, removal_vc) do
+          {:ok, Map.delete(current_state, item)}
         else
           # Add wins - remove was concurrent/before add
-          {:ok, state}
+          {:ok, current_state}
         end
     end
   end
 
   # Handle updates without explicit node (use current node)
-  def update({:add, element}, state) do
-    node = node()
-    vc = Map.get(state, element, Vector_Clock.new())
-    {:ok, Map.put(state, element, Vector_Clock.increment(vc, node))}
+  def apply_effect({:add_effect, item}, current_state) do
+    current_node = node()
+    version_clock = Map.get(current_state, item, Vector_Clock.new())
+    {:ok, Map.put(current_state, item, Vector_Clock.increment(version_clock, current_node))}
   end
 
-  def update({:rm, {element, remove_vc}}, state) do
-    case Map.get(state, element) do
+  def apply_effect({:remove_effect, {item, removal_vc}}, current_state) do
+    case Map.get(current_state, item) do
       nil ->
-        {:ok, state}
+        {:ok, current_state}
 
-      element_vc ->
-        if Vector_Clock.leq(element_vc, remove_vc) do
-          {:ok, Map.delete(state, element)}
+      item_version_clock ->
+        if Vector_Clock.leq(item_version_clock, removal_vc) do
+          {:ok, Map.delete(current_state, item)}
         else
-          {:ok, state}
+          {:ok, current_state}
         end
     end
   end
 
-  def require_state_downstream({:add, _}) do
+  def requires_state_for_effect({:add_element, _}) do
     false
   end
 
-  def require_state_downstream({:remove, _}) do
+  def requires_state_for_effect({:remove_element, _}) do
     true
   end
 
-  def equal(state1, state2) do
-    state1 == state2
+  def are_equal(state_one, state_two) do
+    state_one == state_two
   end
 end
