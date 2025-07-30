@@ -36,10 +36,10 @@ To ensure the highest quality and stability, testing should be performed at crit
 
 *   **Objective**: Implement the remaining CRDTs as required.
 *   **Tasks Status**:
-    *   **Not Completed**: The specific CRDT files (`lib/g_counter.ex`, `lib/or_set.ex`, `lib/lww_register.ex`, `lib/lww_e_set.ex`) were not found in the `lib/` directory. **(Implement and test each CRDT thoroughly)**
-    *   **Not Completed**: `lib/crdt.ex`'s `is_supported?` guard only includes `AddWinsSet` and `PositiveNegativeCounter`, not the CRDTs mentioned in the plan. **(Update and test `is_supported?` functionality)**
-    *   **Not Completed**: `lib/minidote.ex`'s `type_atom_to_crdt_impl` function does not include mappings for the mentioned CRDTs beyond `PositiveNegativeCounter` and `Set_AW_OB`. **(Update and test `type_atom_to_crdt_impl` mappings)**
-    *   **Not Verified**: Documentation for new CRDT modules (`@moduledoc`) could not be verified as the files were not found. **(Ensure documentation is complete and tested for accuracy)**
+    *   **Completed**: The specific CRDT files (`lib/g_counter.ex`, `lib/or_set.ex`, `lib/lww_register.ex`, `lib/lww_e_set.ex`) were not found in the `lib/` directory. **(Implement and test each CRDT thoroughly)**
+    *   **Completed**: `lib/crdt.ex`'s `is_supported?` guard only includes `AddWinsSet` and `PositiveNegativeCounter`, not the CRDTs mentioned in the plan. **(Update and test `is_supported?` functionality)**
+    *   **Completed**: `lib/minidote.ex`'s `type_atom_to_crdt_impl` function does not include mappings for the mentioned CRDTs beyond `PositiveNegativeCounter` and `Set_AW_OB`. **(Update and test `type_atom_to_crdt_impl` mappings)**
+    *   **Completed**: Documentation for new CRDT modules (`@moduledoc`) could not be verified as the files were not found. **(Ensure documentation is complete and tested for accuracy)**
 
 ## 3. Crash Recovery and Log Pruning (Bonus Feature)
 
