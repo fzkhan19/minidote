@@ -26,7 +26,7 @@ defmodule ConflictFreeReplicatedDataType do
   @type internal_representation :: term
   @type internal_effect_representation :: term
 
-  @callback initialize() :: internal_representation()
+  @callback new() :: internal_representation()
   @callback retrieve_value(internal_value :: internal_representation) :: current_value()
   @callback generate_effect(operation_payload(), internal_representation()) :: {:ok, propagation_effect()} | {:error, error_reason}
   @callback apply_effect(propagation_effect(), internal_representation()) :: {:ok, internal_representation()}
@@ -37,10 +37,14 @@ defmodule ConflictFreeReplicatedDataType do
   # ToDo: Add new types as needed
   defguard is_supported?(type)
            when type == AddWinsSet or
-                  type == PositiveNegativeCounter
+                  type == PositiveNegativeCounter or
+                  type == GCounter or
+                  type == ORSet or
+                  type == LWWRegister or
+                  type == LWWEWSet
 
   def create_new(type) when is_supported?(type) do
-    type.initialize()
+    type.new()
   end
 
   def get_current_value(type, state) do

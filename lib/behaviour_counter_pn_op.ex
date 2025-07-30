@@ -8,7 +8,7 @@ defmodule PositiveNegativeCounter do
 
   @type internal_state :: {map, map}
 
-  def initialize() do
+  def new() do
     {%{}, %{}}
   end
 

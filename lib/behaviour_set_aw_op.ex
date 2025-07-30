@@ -7,7 +7,7 @@ defmodule AddWinsSet do
 
   @type internal_state :: map()
 
-  def initialize() do
+  def new() do
     %{}
   end
 
