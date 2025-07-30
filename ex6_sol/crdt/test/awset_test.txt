@@ -1,0 +1,8 @@
+defmodule AWSetTest do
+  use ExUnit.Case
+  doctest AWSet
+
+  test "new/0" do
+    raise "Not yet implemented"
+  end
+end
