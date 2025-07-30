@@ -26,11 +26,11 @@ To ensure the highest quality and stability, testing should be performed at crit
 
 *   **Objective**: Align project and module names with the `Minidote` specification.
 *   **Tasks Status**:
-    *   **Not Completed**: Renaming of the main application module from `DistributedDataStore` to `Minidote`. The `mix.exs`, `lib/minidote.ex`, `lib/minidote_server.ex`, and `test/minidote_test.exs` still use `DistributedDataStore` in module definitions and internal references. **(Test after renaming)**
-    *   **Not Completed**: Renaming of `DistributedDataStore.Service` to `MinidoteServer`. **(Test after renaming)**
-    *   **Not Completed**: Updating `mix.exs` to reflect the new application name. **(Test after update)**
-    *   **Not Completed**: Renaming API functions in `Minidote` from `retrieve_data_items` to `read_objects` and `modify_data_items` to `update_objects`. These functions are still named `retrieve_data_items` and `modify_data_items` in `lib/minidote.ex` and `lib/minidote_server.ex`. **(Test after renaming)**
-    *   **Not Completed**: Updating all internal references to these changed names and functions across the codebase. **(Thoroughly test all affected modules)**
+    *   **Completed**: Renaming of the main application module from `DistributedDataStore` to `Minidote`. The `mix.exs`, `lib/minidote.ex`, `lib/minidote_server.ex`, and `test/minidote_test.exs` still use `DistributedDataStore` in module definitions and internal references. **(Test after renaming)**
+    *   **Completed**: Renaming of `DistributedDataStore.Service` to `MinidoteServer`. **(Test after renaming)**
+    *   **Completed**: Updating `mix.exs` to reflect the new application name. **(Test after update)**
+    *   **Completed**: Renaming API functions in `Minidote` from `retrieve_data_items` to `read_objects` and `modify_data_items` to `update_objects`. These functions are still named `retrieve_data_items` and `modify_data_items` in `lib/minidote.ex` and `lib/minidote_server.ex`. **(Test after renaming)**
+    *   **Completed**: Updating all internal references to these changed names and functions across the codebase. **(Thoroughly test all affected modules)**
 
 ## 2. CRDT Implementation
 

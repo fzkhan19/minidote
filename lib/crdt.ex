@@ -37,7 +37,11 @@ defmodule ConflictFreeReplicatedDataType do
   # ToDo: Add new types as needed
   defguard is_supported?(type)
            when type == AddWinsSet or
-                  type == PositiveNegativeCounter
+                  type == PositiveNegativeCounter or
+                  type == GCounter or
+                  type == ORSet or
+                  type == LWWRegister or
+                  type == LWWEWSet
 
   def create_new(type) when is_supported?(type) do
     type.initialize()
