@@ -36,8 +36,8 @@ defmodule LinkLayerDistr do
   end
 
   @impl true
-  def handle_call({:send, data, node}, _from, state) do
-    GenServer.cast({state.group_name, node}, {:remote, data})
+  def handle_call({:send, data, node, broadcast_name}, _from, state) do
+    GenServer.cast({state.group_name, node}, {:remote, data, broadcast_name})
     {:reply, :ok, state}
   end
 
@@ -67,7 +67,14 @@ defmodule LinkLayerDistr do
   end
 
   @impl true
+  def handle_cast({:remote, msg, broadcast_name}, state) do
+    send(broadcast_name, {:remote, msg})
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_cast({:remote, msg}, state) do
+    # This clause is for backward compatibility with older message formats
     respond_to = state.respond_to
     send(respond_to, {:remote, msg})
     {:noreply, state}

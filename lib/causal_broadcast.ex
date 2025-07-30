@@ -3,12 +3,12 @@ defmodule CausalBroadcast do
 
   # -- Public API --
 
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(name, opts) do
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  def broadcast(message) do
-    GenServer.cast(__MODULE__, {:broadcast, message})
+  def broadcast(name, message) do
+    GenServer.cast(name, {:broadcast, message})
   end
 
   # -- GenServer Callbacks --
@@ -17,9 +17,11 @@ defmodule CausalBroadcast do
   def init(opts) do
     # Get the owner PID from options
     owner_pid = Keyword.get(opts, :owner, self())
+    name = Keyword.get(opts, :name) # Retrieve the name passed to start_link
+    group_name = Keyword.get(opts, :link_group_name, String.to_atom("#{Atom.to_string(name)}_link_layer")) # Use passed group_name or default
 
     # Start the link layer to connect to other nodes
-    {:ok, link_layer_pid} = LinkLayer.start_link(:distributed_data_store)
+    {:ok, link_layer_pid} = LinkLayer.start_link(group_name)
 
     # Register self to receive messages from the link layer
     LinkLayer.register(link_layer_pid, self())
@@ -29,7 +31,8 @@ defmodule CausalBroadcast do
       link_layer: link_layer_pid,
       vector_clock: Vector_Clock.new(),
       buffer: [],
-      owner: owner_pid
+      owner: owner_pid,
+      name: name # Store the name in the state
     }
 
     {:ok, initial_state}
@@ -51,7 +54,8 @@ defmodule CausalBroadcast do
     case LinkLayer.other_nodes(state.link_layer) do
       {:ok, other_nodes} ->
         for node_pid <- other_nodes do
-          LinkLayer.send(state.link_layer, tagged_message, node_pid)
+          # Pass the broadcast module's name to LinkLayer.send
+          LinkLayer.send(state.link_layer, tagged_message, node_pid, state.name)
         end
 
       {:error, _reason} ->

@@ -77,7 +77,7 @@ defmodule TestSetup do
   def add_delay_r(requester, _this_node, options) do
     :application.ensure_all_started(:meck)
     :ok = :meck.new(:"Elixir.LinkLayer", [:passthrough])
-    :ok = :meck.expect(:"Elixir.LinkLayer", :send, fn(ll, data, receiver) ->
+    :ok = :meck.expect(:"Elixir.LinkLayer", :send, fn(ll, data, receiver, broadcast_name) ->
       spawn(fn() ->
         case :maps.find(:delay, options) do
           {:ok, ms} when is_number(ms) ->
@@ -94,7 +94,7 @@ defmodule TestSetup do
           false ->
             :ok
         end
-        apply(:meck_util.original_name(:"Elixir.LinkLayer"), :send, [ll, data, receiver])
+        apply(:meck_util.original_name(:"Elixir.LinkLayer"), :send, [ll, data, receiver, broadcast_name])
       end)
     end)
     # answer to requester

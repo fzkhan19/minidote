@@ -8,9 +8,10 @@ defmodule MinidoteServer do
   A distributed key-value store that works with CausalBroadcast and CRDTs.
   """
 
+
   # Public API
-  def start_link(service_name) do
-    GenServer.start_link(__MODULE__, [], name: service_name)
+  def start_link(service_name, opts \\ []) do
+    GenServer.start_link(__MODULE__, Keyword.put(opts, :service_name, service_name), name: service_name)
   end
 
   def retrieve(service, key) do
@@ -27,29 +28,40 @@ defmodule MinidoteServer do
 
   # GenServer Callbacks
   @impl true
-  def init(_) do
+  def init(args) do
+    service_name = Keyword.fetch!(args, :service_name)
+    op_log_name = Keyword.get(args, :op_log_name, :op_log)
+    crdt_snapshots_name = Keyword.get(args, :crdt_snapshots_name, :crdt_snapshots)
+    link_group_name = Keyword.get(args, :link_group_name, :minidote_link_group)
+    snapshot_interval = Keyword.get(args, :snapshot_interval, :timer.minutes(1)) # Default to 1 minute
+
     # Start the causal broadcast layer
-    {:ok, bcast_pid} = CausalBroadcast.start_link(owner: self())
+    bcast_name = String.to_atom("#{service_name}_bcast")
+    {:ok, bcast_pid} = CausalBroadcast.start_link(bcast_name, owner: self(), name: bcast_name, link_group_name: link_group_name)
 
     # Recover state from snapshot and replay logs
-    {recovered_db, recovered_clock} = recover_from_persistence()
+    {recovered_db, recovered_clock} = recover_from_persistence(op_log_name, crdt_snapshots_name)
 
     initial_state = %{
       # Simple key-value store for CRDT objects
       db: recovered_db,
       # Reference to broadcast layer
       bcast: bcast_pid,
+      bcast_name: bcast_name,
       # Vector clock for causality
       clock: recovered_clock,
       # Queue for requests waiting for session guarantees
       waiting_requests: [],
       # Persistent log for operations
-      op_log: case :dets.open_file(:op_log, [type: :set, auto_save: 1000]) do {:ok, ref} -> ref end,
+      op_log: case :dets.open_file(op_log_name, [type: :set, auto_save: 1000]) do {:ok, ref} -> ref end,
       # Persistent storage for CRDT snapshots
-      crdt_snapshots: case :dets.open_file(:crdt_snapshots, [type: :set, auto_save: 1000]) do {:ok, ref} -> ref end
+      crdt_snapshots: case :dets.open_file(crdt_snapshots_name, [type: :set, auto_save: 1000]) do {:ok, ref} -> ref end
     }
 
-    Logger.info("MinidoteServer service initiated")
+    # Schedule periodic snapshots
+    :timer.send_interval(snapshot_interval, self(), :take_snapshot)
+
+    Logger.info("MinidoteServer service initiated on node #{node()} with name #{inspect(service_name)}")
     {:ok, initial_state}
   end
 
@@ -116,7 +128,7 @@ defmodule MinidoteServer do
     new_state = %{state | db: new_db}
 
     # Broadcast the change to other nodes
-    CausalBroadcast.broadcast({:store, key, value})
+    CausalBroadcast.broadcast(state.bcast_name, {:store, key, value})
 
     Logger.debug("Stored key=#{key}, value=#{inspect(value)}")
     {:reply, :ok, new_state}
@@ -129,6 +141,12 @@ defmodule MinidoteServer do
     Enum.each(state.db, fn {key, crdt_state} ->
       :dets.insert(state.crdt_snapshots, {key, crdt_state})
     end)
+    :dets.sync(state.crdt_snapshots)
+
+    # Clear the op_log after taking a snapshot
+    :dets.delete_all_objects(state.op_log)
+    :dets.sync(state.op_log)
+
     Logger.info("CRDT snapshot complete.")
     {:reply, :ok, state}
   end
@@ -142,11 +160,18 @@ defmodule MinidoteServer do
 
   # Handle CRDT updates delivered from other nodes
   @impl true
-  def handle_info(
-        {:deliver,
-         {:crdt_update, full_key, crdt_type_atom, crdt_type, effect, sender_clock, sender_node}},
-        state
-      ) do
+  def handle_info(:system_continue, state) do
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:take_snapshot, state) do
+    # Call the handle_call version of take_snapshot
+    handle_call(:take_snapshot, :no_from, state)
+  end
+
+  @impl true
+  def handle_info({:deliver, {:crdt_update, full_key, crdt_type_atom, crdt_type, effect, sender_clock, sender_node}}, state) do
     # Get current CRDT state or create new one
     current_crdt = Map.get(state.db, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
 
@@ -161,8 +186,7 @@ defmodule MinidoteServer do
         Logger.debug("Applied remote CRDT update: key=#{inspect(full_key)}")
 
         # Log the operation received from remote
-        :dets.insert(state.op_log, {sender_clock, full_key, crdt_type_atom, crdt_type, effect, sender_node})
-
+        :dets.insert(state.op_log, {new_clock, full_key, crdt_type_atom, crdt_type, effect, sender_node})
         # Check waiting requests after clock update
         final_state = check_waiting_requests(new_state)
         :dets.sync(state.op_log)
@@ -174,12 +198,8 @@ defmodule MinidoteServer do
     end
   end
 
-  # Handle older format for backward compatibility
   @impl true
-  def handle_info(
-        {:deliver, {:crdt_update, full_key, crdt_type, effect, sender_clock, sender_node}},
-        state
-      ) do
+  def handle_info({:deliver, {:crdt_update, full_key, crdt_type, effect, sender_clock, sender_node}}, state) do
     # Assume crdt_type is already the module (backward compatibility)
     crdt_type_atom = Minidote.get_crdt_atom(crdt_type)
     current_crdt = Map.get(state.db, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
@@ -193,7 +213,7 @@ defmodule MinidoteServer do
         Logger.debug("Applied remote CRDT update (old format): key=#{inspect(full_key)}")
 
         # Log the operation received from remote (for backward compatibility)
-        :dets.insert(state.op_log, {sender_clock, full_key, crdt_type_atom, crdt_type, effect, sender_node})
+        :dets.insert(state.op_log, {new_clock, full_key, crdt_type_atom, crdt_type, effect, sender_node})
 
         final_state = check_waiting_requests(new_state)
         :dets.sync(state.op_log)
@@ -205,7 +225,6 @@ defmodule MinidoteServer do
     end
   end
 
-  # Handle writes delivered from other nodes via CausalBroadcast (original simple API)
   @impl true
   def handle_info({:deliver, {:store, key, value}}, state) do
     # Apply the remote store to our database
@@ -217,6 +236,12 @@ defmodule MinidoteServer do
   end
 
   @impl true
+  def handle_info(msg, state) do
+    Logger.warning("Unhandled info message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
+  @impl true
   def terminate(_reason, state) do
     Logger.info("Closing op_log dets table and crdt_snapshots table.")
     :dets.close(state.op_log)
@@ -224,16 +249,20 @@ defmodule MinidoteServer do
     :ok
   end
 
-  # This is needed for clean shutdown when dets is used
-  @impl true
-  def handle_info(:system_continue, state) do
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info(msg, state) do
-    Logger.warning("Unhandled info message: #{inspect(msg)}")
-    {:noreply, state}
+  @doc """
+  Waits until the MinidoteServer with the given name is ready.
+  """
+  def wait_until_ready(service_name) do
+    Logger.debug("Waiting for MinidoteServer #{inspect(service_name)} to be ready on node #{node()}")
+    :ok = GenServer.whereis(service_name)
+    # Ping the server to ensure it's responsive
+    GenServer.call(service_name, :ping, :infinity)
+  rescue
+    _ ->
+      # If GenServer.whereis fails, it means the server is not yet registered.
+      # Wait a bit and retry.
+      Process.sleep(50)
+      wait_until_ready(service_name)
   end
 
   # Private helper functions
@@ -285,6 +314,7 @@ defmodule MinidoteServer do
     # Broadcast all effects
     for {full_key, crdt_type_atom, crdt_type, effect} <- effects do
       CausalBroadcast.broadcast(
+        state.bcast_name,
         {:crdt_update, full_key, crdt_type_atom, crdt_type, effect, new_clock, node()}
       )
     end
@@ -345,11 +375,11 @@ defmodule MinidoteServer do
   end
 
   # Recovery function
-  defp recover_from_persistence() do
+  defp recover_from_persistence(op_log_name, crdt_snapshots_name) do
     Logger.info("Attempting to recover state from persistent storage...")
 
     # Load snapshot
-    crdt_snapshots_ref = :dets.open_file(:crdt_snapshots, [type: :set])
+    crdt_snapshots_ref = :dets.open_file(crdt_snapshots_name, [type: :set])
     db =
       :dets.foldl(
         fn {key, crdt_state}, acc ->
@@ -363,7 +393,7 @@ defmodule MinidoteServer do
     Logger.info("Loaded CRDT snapshot. Replaying logs...")
 
     # Replay operations from op_log
-    op_log_ref = :dets.open_file(:op_log, [type: :set])
+    op_log_ref = :dets.open_file(op_log_name, [type: :set])
     {final_db, final_clock} =
       :dets.foldl(
         fn {clock, full_key, _crdt_type_atom, crdt_type, effect, sender_node},
