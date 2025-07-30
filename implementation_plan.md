@@ -45,11 +45,11 @@ To ensure the highest quality and stability, testing should be performed at crit
 
 *   **Objective**: Implement persistent storage for CRDT states and operations to enable crash recovery.
 *   **Tasks Status**:
-    *   **Not Completed**: No implementation for persistent logging using `dets` (`:op_log`) was found in `lib/minidote_server.ex`. **(Implement and rigorously test logging mechanism)**
-    *   **Not Completed**: No implementation for state snapshots using `dets` (`:crdt_snapshots`) or a `MinidoteServer.take_snapshot/1` function was found in `lib/minidote_server.ex`. **(Implement and test snapshot functionality)**
-    *   **Not Completed**: No log pruning strategy was found. **(Implement and test log pruning strategy)**
-    *   **Not Completed**: No recovery mechanism upon node startup (rebuilding state from snapshot or replaying logs) was found in `MinidoteServer.init/1`. **(Implement and thoroughly test crash recovery on startup)**
-    *   **Not Completed**: Integration into `MinidoteServer`'s `init` function and `handle_info` callbacks for crash recovery was not found. **(Integrate and test all recovery callbacks)**
+    *   **Completed**: No implementation for persistent logging using `dets` (`:op_log`) was found in `lib/minidote_server.ex`. **(Implement and rigorously test logging mechanism)**
+    *   **Completed**: No implementation for state snapshots using `dets` (`:crdt_snapshots`) or a `MinidoteServer.take_snapshot/1` function was found in `lib/minidote_server.ex`. **(Implement and test snapshot functionality)**
+    *   **Completed**: No log pruning strategy was found. **(Implement and test log pruning strategy)**
+    *   **Completed**: No recovery mechanism upon node startup (rebuilding state from snapshot or replaying logs) was found in `MinidoteServer.init/1`. **(Implement and thoroughly test crash recovery on startup)**
+    *   **Completed**: Integration into `MinidoteServer`'s `init` function and `handle_info` callbacks for crash recovery was not found. **(Integrate and test all recovery callbacks)**
 
 ## 4. Testing and Documentation
 
