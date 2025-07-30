@@ -1,19 +1,19 @@
-defmodule DistributedDataStore do
+defmodule Minidote do
   require Logger
   require ConflictFreeReplicatedDataType
 
   @moduledoc """
   Documentation for `DistributedDataStore`.
 
-  DistributedDataStore is a causally consistent CRDT database that provides a key-value store
+  Minidote is a causally consistent CRDT database that provides a key-value store
   where each key is a 3-tuple consisting of:
   - Key: binary() - the main identifier
   - Type: ConflictFreeReplicatedDataType.crdt_type_definition() - the CRDT type (e.g., Counter_PN_OB, Set_AW_OB)
   - Bucket: binary() - the namespace
 
   The API provides two main functions:
-  - retrieve_data_items/2: Retrieve multiple objects atomically
-  - modify_data_items/2: Modify multiple objects atomically
+  - read_objects/2: Retrieve multiple objects atomically
+  - update_objects/2: Modify multiple objects atomically
 
   Both functions support session guarantees through version tokens.
   """
@@ -32,7 +32,7 @@ defmodule DistributedDataStore do
   end
 
   def start_service_link(service_name) do
-    DistributedDataStore.Service.start_link(service_name)
+    MinidoteServer.start_link(service_name)
   end
 
   @doc """
@@ -50,19 +50,19 @@ defmodule DistributedDataStore do
   The version_token parameter ensures session guarantees - if provided from a previous
   operation, this retrieval will observe a state at least as recent as that operation.
   """
-  @spec retrieve_data_items([data_key()], version_token()) ::
+  @spec read_objects([data_key()], version_token()) ::
           {:ok, [{data_key(), item_value()}], version_token()} | {:error, any()}
-  def retrieve_data_items(data_items, version_token) do
-    Logger.notice("#{node()}: retrieve_data_items(#{inspect(data_items)}, #{inspect(version_token)})")
+  def read_objects(data_items, version_token) do
+    Logger.notice("#{node()}: read_objects(#{inspect(data_items)}, #{inspect(version_token)})")
 
     # Validate input
     case validate_data_keys(data_items) do
       :ok ->
         # Forward the call to the named GenServer
-        GenServer.call(DistributedDataStore.Service, {:retrieve_data_items, data_items, version_token})
+        GenServer.call(MinidoteServer, {:read_objects, data_items, version_token})
 
       {:error, reason} ->
-        Logger.warning("#{node()}: Invalid data keys in retrieve_data_items: #{inspect(reason)}")
+        Logger.warning("#{node()}: Invalid data keys in read_objects: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -83,19 +83,19 @@ defmodule DistributedDataStore do
   The version_token parameter ensures session guarantees - if provided from a previous
   operation, this modification will be applied on a state at least as recent as that operation.
   """
-  @spec modify_data_items([{data_key(), item_operation(), operation_args()}], version_token()) ::
+  @spec update_objects([{data_key(), item_operation(), operation_args()}], version_token()) ::
           {:ok, version_token()} | {:error, any()}
-  def modify_data_items(modifications, version_token) do
-    Logger.notice("#{node()}: modify_data_items(#{inspect(modifications)}, #{inspect(version_token)})")
+  def update_objects(modifications, version_token) do
+    Logger.notice("#{node()}: update_objects(#{inspect(modifications)}, #{inspect(version_token)})")
 
     # Validate input
     case validate_item_modifications(modifications) do
       :ok ->
         # Forward the call to the named GenServer
-        GenServer.call(DistributedDataStore.Service, {:modify_data_items, modifications, version_token})
+        GenServer.call(MinidoteServer, {:update_objects, modifications, version_token})
 
       {:error, reason} ->
-        Logger.warning("#{node()}: Invalid modifications in modify_data_items: #{inspect(reason)}")
+        Logger.warning("#{node()}: Invalid modifications in update_objects: #{inspect(reason)}")
         {:error, reason}
     end
   end

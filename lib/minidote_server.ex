@@ -1,10 +1,10 @@
-defmodule DistributedDataStore.Service do
+defmodule MinidoteServer do
   use GenServer
   require Logger
   require ConflictFreeReplicatedDataType
 
   @moduledoc """
-  The API documentation for `DistributedDataStore.Service`.
+  The API documentation for `MinidoteServer`.
   A distributed key-value store that works with CausalBroadcast and CRDTs.
   """
 
@@ -44,14 +44,14 @@ defmodule DistributedDataStore.Service do
 
   # Handle CRDT read_objects requests
   @impl true
-  def handle_call({:retrieve_data_items, objects, client_clock}, from, state) do
+  def handle_call({:read_objects, objects, client_clock}, from, state) do
     # Check session guarantees
     if client_clock == :ignore or Vector_Clock.leq(client_clock, state.clock) do
       # Session guarantee satisfied, process immediately
       results =
         Enum.map(objects, fn {_key, crdt_type_atom, _bucket} = full_key ->
           # Convert atom to actual CRDT module
-          crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
+          crdt_type = Minidote.get_crdt_implementation(crdt_type_atom)
 
           case Map.get(state.db, full_key) do
             nil ->
@@ -70,21 +70,21 @@ defmodule DistributedDataStore.Service do
       {:reply, {:ok, results, state.clock}, state}
     else
       # Session guarantee not met, queue the request
-      new_waiting = [{:retrieve_data_items, objects, client_clock, from} | state.waiting_requests]
+      new_waiting = [{:read_objects, objects, client_clock, from} | state.waiting_requests]
       {:noreply, %{state | waiting_requests: new_waiting}}
     end
   end
 
   # Handle CRDT update_objects requests
   @impl true
-  def handle_call({:modify_data_items, updates, client_clock}, from, state) do
+  def handle_call({:update_objects, updates, client_clock}, from, state) do
     # Check session guarantees
     if client_clock == :ignore or Vector_Clock.leq(client_clock, state.clock) do
       # Session guarantee satisfied, process immediately
       process_item_modifications(updates, state, from)
     else
       # Session guarantee not met, queue the request
-      new_waiting = [{:modify_data_items, updates, client_clock, from} | state.waiting_requests]
+      new_waiting = [{:update_objects, updates, client_clock, from} | state.waiting_requests]
       {:noreply, %{state | waiting_requests: new_waiting}}
     end
   end
@@ -204,7 +204,7 @@ defmodule DistributedDataStore.Service do
                                                        operation, args},
                                                       {db_acc, effects_acc} ->
         # Convert atom to actual CRDT module
-        crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
+        crdt_type = Minidote.get_crdt_implementation(crdt_type_atom)
 
         # Get current CRDT state or create new one
         current_crdt = Map.get(db_acc, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
@@ -264,10 +264,10 @@ defmodule DistributedDataStore.Service do
       Enum.reduce(ready_requests, %{state | waiting_requests: still_waiting}, fn request,
                                                                                  acc_state ->
         case request do
-          {:retrieve_data_items, objects, _client_clock, from} ->
+          {:read_objects, objects, _client_clock, from} ->
             results =
               Enum.map(objects, fn {_key, crdt_type_atom, _bucket} = full_key ->
-                crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
+                crdt_type = Minidote.get_crdt_implementation(crdt_type_atom)
 
                 case Map.get(acc_state.db, full_key) do
                   nil ->
@@ -284,7 +284,7 @@ defmodule DistributedDataStore.Service do
             GenServer.reply(from, {:ok, results, acc_state.clock})
             acc_state
 
-          {:modify_data_items, updates, _client_clock, from} ->
+          {:update_objects, updates, _client_clock, from} ->
             # Process the modification (this will handle the reply internally)
             {:noreply, new_state} = process_item_modifications(updates, acc_state, from)
             new_state
@@ -296,22 +296,22 @@ defmodule DistributedDataStore.Service do
 end
 
 # Simple example
-defmodule DistributedDataStore.SampleUsage do
+defmodule Minidote.SampleUsage do
   def demonstration do
     # Start service
-    {:ok, _process_id} = DistributedDataStore.Service.start_link(:my_service)
+    {:ok, _process_id} = MinidoteServer.start_link(:my_service)
 
     # Store some information
-    :ok = DistributedDataStore.Service.store(:my_service, "entity_name", "Bob")
+    :ok = MinidoteServer.store(:my_service, "entity_name", "Bob")
 
     # Retrieve it
-    {:ok, retrieved_value} = DistributedDataStore.Service.retrieve(:my_service, "entity_name")
+    {:ok, retrieved_value} = MinidoteServer.retrieve(:my_service, "entity_name")
     IO.puts("Retrieved: #{retrieved_value}")
   end
 
   def crdt_sample do
     # Example using the CRDT API directly through the service
-    # This assumes the DistributedDataStore.Service is registered as DistributedDataStore.Service
+    # This assumes the MinidoteServer is registered as MinidoteServer
     version_token = Vector_Clock.new()
 
     # Define a set key - use the atom representation
@@ -319,15 +319,15 @@ defmodule DistributedDataStore.SampleUsage do
 
     # Perform modifications using GenServer.call directly
     case GenServer.call(
-           DistributedDataStore.Service,
-           {:modify_data_items,
+           MinidoteServer,
+           {:update_objects,
             [
               {set_identifier, :add_element, {"component_A", :marker1}}
             ], version_token}
          ) do
       {:ok, updated_token} ->
         # Retrieve the set
-        case GenServer.call(DistributedDataStore.Service, {:retrieve_data_items, [set_identifier], updated_token}) do
+        case GenServer.call(MinidoteServer, {:read_objects, [set_identifier], updated_token}) do
           {:ok, results_data, _retrieval_token} ->
             IO.inspect(results_data, label: "Set contents")
             :ok

@@ -29,8 +29,8 @@ defmodule TestSetup do
     rpc.(Application, :ensure_all_started, [:logger])
     rpc.(Logger, :configure, [[level: Logger.level()]])
     rpc.(Mix, :env, [Mix.env()])
-    Logger.notice("Starting distributed_data_store on node: #{inspect node}")
-    rpc.(Application, :ensure_all_started, [:distributed_data_store])
+    Logger.notice("Starting minidote on node: #{inspect node}")
+    rpc.(Application, :ensure_all_started, [:minidote])
 
     node
   end
