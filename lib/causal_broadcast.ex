@@ -1,12 +1,33 @@
 defmodule CausalBroadcast do
   use GenServer
 
+  @moduledoc """
+  Implements a causal broadcast mechanism using vector clocks and a link layer for communication.
+
+  This module ensures that messages are delivered in causal order, meaning that if message A
+  happened before message B, then A will be delivered before B at all nodes.
+  """
+
   # -- Public API --
 
+  @doc """
+  Starts the CausalBroadcast GenServer.
+
+  `name` - The registered name for the GenServer.
+  `opts` - Options for the GenServer, including:
+    - `:owner` (required): The PID of the process that will receive delivered messages.
+    - `:link_group_name` (optional): The name of the link group used by the LinkLayer.
+  """
   def start_link(name, opts) do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
+  @doc """
+  Broadcasts a message to all other nodes in the cluster.
+
+  `name` - The registered name of the CausalBroadcast GenServer.
+  `message` - The message to broadcast.
+  """
   def broadcast(name, message) do
     GenServer.cast(name, {:broadcast, message})
   end
@@ -14,16 +35,24 @@ defmodule CausalBroadcast do
   # -- GenServer Callbacks --
 
   @impl true
-  def init(opts) do
-    # Get the owner PID from options
-    owner_pid = Keyword.get(opts, :owner, self())
-    name = Keyword.get(opts, :name) # Retrieve the name passed to start_link
-    group_name = Keyword.get(opts, :link_group_name, String.to_atom("#{Atom.to_string(name)}_link_layer")) # Use passed group_name or default
+  @impl true
+  @doc """
+  Initializes the CausalBroadcast GenServer.
 
-    # Start the link layer to connect to other nodes
+  Starts the LinkLayer, registers the CausalBroadcast process with the LinkLayer,
+  and initializes the state with the LinkLayer PID, a new VectorClock, an empty buffer,
+  the owner PID, and the GenServer name.
+  """
+  def init(opts) do
+    # Get the owner PID from options (the process that will receive delivered messages)
+    owner_pid = Keyword.get(opts, :owner, self())
+    name = Keyword.get(opts, :name) # Retrieve the name passed to start_link, so the LinkLayer knows who sent the message
+    group_name = Keyword.get(opts, :link_group_name, String.to_atom("#{Atom.to_string(name)}_link_layer")) # Use passed group_name or default, for the LinkLayer to identify other nodes
+
+    # Start the link layer to connect to other nodes using the group_name
     {:ok, link_layer_pid} = LinkLayer.start_link(group_name)
 
-    # Register self to receive messages from the link layer
+    # Register self to receive messages from the link layer, so we can receive messages from other nodes
     LinkLayer.register(link_layer_pid, self())
 
     # Initialize state
@@ -40,8 +69,15 @@ defmodule CausalBroadcast do
 
   # Handle broadcast requests
   @impl true
+  @doc """
+  Handles the `:broadcast` cast.
+
+  Increments the local vector clock, tags the message with the clock and sender node,
+  sends the tagged message to all other nodes via the LinkLayer, and updates the state
+  with the incremented vector clock.
+  """
   def handle_cast({:broadcast, message}, state) do
-    # Get this node's name
+    # Get this node's name (Elixir node name)
     this_node = node()
 
     # Increment our clock
@@ -50,11 +86,11 @@ defmodule CausalBroadcast do
     # Create tagged message with explicit sender
     tagged_message = {message, new_clock, this_node}
 
-    # Send to all other nodes - handle the {:ok, nodes} return value
+    # Send to all other nodes using the LinkLayer - handle the {:ok, nodes} return value
     case LinkLayer.other_nodes(state.link_layer) do
       {:ok, other_nodes} ->
         for node_pid <- other_nodes do
-          # Pass the broadcast module's name to LinkLayer.send
+          # Pass the broadcast module's name to LinkLayer.send so the LinkLayer knows who sent the message
           LinkLayer.send(state.link_layer, tagged_message, node_pid, state.name)
         end
 
@@ -72,9 +108,18 @@ defmodule CausalBroadcast do
 
   # Handle remote messages
   @impl true
+  @doc """
+  Handles incoming messages from the LinkLayer.
+
+  If the message is causally ready (as determined by `message_is_ready?/3`), it is
+  delivered to the owner process, the local vector clock is merged with the sender's
+  clock, and the buffer is processed to see if any buffered messages are now ready.
+
+  If the message is not causally ready, it is added to the buffer for later processing.
+  """
   def handle_info({:remote, {message, sender_clock, sender_node}}, state) do
     if message_is_ready?(sender_clock, sender_node, state.vector_clock) do
-      # Message is ready - deliver it
+      # Message is causally ready - deliver it to the owner
       send(state.owner, {:deliver, message})
 
       # Merge clocks
@@ -90,10 +135,15 @@ defmodule CausalBroadcast do
     end
   end
 
-  # Fallback for old 2-tuple format (backward compatibility)
   @impl true
+  @doc """
+  Handles incoming messages from the LinkLayer (fallback for old 2-tuple format).
+
+  This function is for backward compatibility with older versions of the system. It attempts to infer the sender node from the clock,
+  and if successful and the message is causally ready, it delivers the message and merges the clocks. Otherwise, it buffers the message.
+  """
   def handle_info({:remote, {message, sender_clock}}, state) do
-    # Try to infer sender from clock
+    # Try to infer sender from clock, since older versions didn't send the sender node
     sender_node = infer_sender_from_clock(sender_clock, state.vector_clock)
 
     if sender_node != :unknown and
@@ -110,7 +160,13 @@ defmodule CausalBroadcast do
 
   # -- Helper Functions --
 
-  # Check if a message is causally ready to be delivered
+  @doc """
+  Checks if a message is causally ready to be delivered.
+
+  A message from sender S with clock C is causally ready if:
+  1.  C[S] = local_clock[S] + 1 (The sender's clock value for the sender node is one greater than the local clock's value for the sender node.)
+  2.  For all other nodes N: C[N] <= local_clock[N] (The sender's clock value for all other nodes is less than or equal to the local clock's value for those nodes.)
+  """
   defp message_is_ready?(sender_clock, sender_node, local_clock) do
     # For causal ordering, a message from sender S with clock C is ready if:
     # 1. For the sender node: C[S] = local_clock[S] + 1
@@ -136,7 +192,13 @@ defmodule CausalBroadcast do
     end
   end
 
-  # Fallback method to infer sender from clock differences
+  @doc """
+  Infers the sender node from the clock differences (fallback method).
+
+  This method is used when the sender node is not explicitly included in the message
+  (for backward compatibility). It finds the node whose clock value in the sender's
+  clock is exactly one greater than its value in the local clock.
+  """
   defp infer_sender_from_clock(sender_clock, local_clock) do
     # Find the node whose clock value is exactly local + 1
     Enum.find_value(sender_clock, fn {node, value} ->
@@ -145,7 +207,14 @@ defmodule CausalBroadcast do
     end) || :unknown
   end
 
-  # Process buffered messages to see if any are now ready
+  @doc """
+  Processes the message buffer to see if any buffered messages are now ready for delivery.
+
+  This function iterates through the buffer and checks if each message is causally ready.
+  Ready messages are delivered, and the vector clock is updated. The function then
+  recursively calls itself to process the remaining buffer in case delivering the
+  ready messages has made other messages ready as well.
+  """
   defp process_buffer(state) do
     {ready_messages, remaining_buffer} =
       Enum.split_with(state.buffer, fn
@@ -170,13 +239,18 @@ defmodule CausalBroadcast do
     end
   end
 
-  # Deliver buffered messages and update clock
+  @doc """
+  Delivers a list of buffered messages and updates the vector clock accordingly.
+
+  This function iterates through the list of messages, delivers each message to the
+  owner process, and merges the sender's vector clock into the local vector clock.
+  """
   defp deliver_buffered_messages(messages, state) do
     Enum.reduce(messages, state, fn
       {message, sender_clock, _sender}, acc_state ->
-        # Deliver message
+        # Deliver message to the owner process
         send(acc_state.owner, {:deliver, message})
-        # Merge clock
+        # Merge sender's clock into the local clock
         merged_clock = Vector_Clock.merge(acc_state.vector_clock, sender_clock)
         %{acc_state | vector_clock: merged_clock}
 
