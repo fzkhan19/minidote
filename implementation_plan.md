@@ -7,7 +7,7 @@ This document outlines the necessary steps to bring the `DistributedDataStore` p
 To ensure a structured and robust development process, the following guidelines will be adhered to during implementation:
 
 *   **Feature-by-Feature Implementation**: Features will be implemented one at a time.
-*   **Test After Each Change**: After implementing or changing a feature, the application will be thoroughly tested to ensure all existing tests pass. Existing test cases will **not** be modified.
+*   **Test After Each Change**: After implementing or changing a feature, `mix test` must be run. This is absolutely necessary. The application will be thoroughly tested to ensure all existing tests pass. Existing test cases will **not** be modified.
 *   **Git Commit**: A Git commit will be created after each successful feature implementation/change and successful testing.
 *   **No Test Case Modification**: Existing test cases are considered final and will not be altered.
 
