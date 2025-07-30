@@ -5,15 +5,15 @@ defmodule Minidote do
   @moduledoc """
   Documentation for `DistributedDataStore`.
 
-  Minidote is a causally consistent CRDT database that provides a key-value store
+  DistributedDataStore is a causally consistent CRDT database that provides a key-value store
   where each key is a 3-tuple consisting of:
   - Key: binary() - the main identifier
   - Type: ConflictFreeReplicatedDataType.crdt_type_definition() - the CRDT type (e.g., Counter_PN_OB, Set_AW_OB)
   - Bucket: binary() - the namespace
 
   The API provides two main functions:
-  - read_objects/2: Retrieve multiple objects atomically
-  - update_objects/2: Modify multiple objects atomically
+  - retrieve_data_items/2: Retrieve multiple objects atomically
+  - modify_data_items/2: Modify multiple objects atomically
 
   Both functions support session guarantees through version tokens.
   """
@@ -50,19 +50,19 @@ defmodule Minidote do
   The version_token parameter ensures session guarantees - if provided from a previous
   operation, this retrieval will observe a state at least as recent as that operation.
   """
-  @spec read_objects([data_key()], version_token()) ::
+  @spec retrieve_data_items([data_key()], version_token()) ::
           {:ok, [{data_key(), item_value()}], version_token()} | {:error, any()}
-  def read_objects(data_items, version_token) do
-    Logger.notice("#{node()}: read_objects(#{inspect(data_items)}, #{inspect(version_token)})")
+  def retrieve_data_items(data_items, version_token) do
+    Logger.notice("#{node()}: retrieve_data_items(#{inspect(data_items)}, #{inspect(version_token)})")
 
     # Validate input
     case validate_data_keys(data_items) do
       :ok ->
         # Forward the call to the named GenServer
-        GenServer.call(MinidoteServer, {:read_objects, data_items, version_token})
+        GenServer.call(MinidoteServer, {:retrieve_data_items, data_items, version_token})
 
       {:error, reason} ->
-        Logger.warning("#{node()}: Invalid data keys in read_objects: #{inspect(reason)}")
+        Logger.warning("#{node()}: Invalid data keys in retrieve_data_items: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -83,19 +83,19 @@ defmodule Minidote do
   The version_token parameter ensures session guarantees - if provided from a previous
   operation, this modification will be applied on a state at least as recent as that operation.
   """
-  @spec update_objects([{data_key(), item_operation(), operation_args()}], version_token()) ::
+  @spec modify_data_items([{data_key(), item_operation(), operation_args()}], version_token()) ::
           {:ok, version_token()} | {:error, any()}
-  def update_objects(modifications, version_token) do
-    Logger.notice("#{node()}: update_objects(#{inspect(modifications)}, #{inspect(version_token)})")
+  def modify_data_items(modifications, version_token) do
+    Logger.notice("#{node()}: modify_data_items(#{inspect(modifications)}, #{inspect(version_token)})")
 
     # Validate input
     case validate_item_modifications(modifications) do
       :ok ->
         # Forward the call to the named GenServer
-        GenServer.call(MinidoteServer, {:update_objects, modifications, version_token})
+        GenServer.call(MinidoteServer, {:modify_data_items, modifications, version_token})
 
       {:error, reason} ->
-        Logger.warning("#{node()}: Invalid modifications in update_objects: #{inspect(reason)}")
+        Logger.warning("#{node()}: Invalid modifications in modify_data_items: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -148,6 +148,10 @@ defmodule Minidote do
   defp type_atom_to_crdt_impl(:set_aw_ob), do: {:ok, Set_AW_OB}
   # Support both variants
   defp type_atom_to_crdt_impl(:set_aw_op), do: {:ok, Set_AW_OB}
+  defp type_atom_to_crdt_impl(:g_counter), do: {:ok, GCounter}
+  defp type_atom_to_crdt_impl(:or_set), do: {:ok, ORSet}
+  defp type_atom_to_crdt_impl(:lww_register), do: {:ok, LWWRegister}
+  defp type_atom_to_crdt_impl(:lww_e_set), do: {:ok, LWWEWSet}
   # Add more mappings as you implement more CRDTs
   # defp type_atom_to_crdt_impl(:counter_pn_sb), do: {:ok, Counter_PN_SB}
   # defp type_atom_to_crdt_impl(:mvregister_sb), do: {:ok, MVRegister_SB}

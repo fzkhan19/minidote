@@ -26,30 +26,30 @@ To ensure the highest quality and stability, testing should be performed at crit
 
 *   **Objective**: Align project and module names with the `Minidote` specification.
 *   **Tasks Status**:
-    *   **Not Completed**: Renaming of the main application module from `DistributedDataStore` to `Minidote`. The `mix.exs`, `lib/minidote.ex`, `lib/minidote_server.ex`, and `test/minidote_test.exs` still use `DistributedDataStore` in module definitions and internal references. **(Test after renaming)**
-    *   **Not Completed**: Renaming of `DistributedDataStore.Service` to `MinidoteServer`. **(Test after renaming)**
-    *   **Not Completed**: Updating `mix.exs` to reflect the new application name. **(Test after update)**
-    *   **Not Completed**: Renaming API functions in `Minidote` from `retrieve_data_items` to `read_objects` and `modify_data_items` to `update_objects`. These functions are still named `retrieve_data_items` and `modify_data_items` in `lib/minidote.ex` and `lib/minidote_server.ex`. **(Test after renaming)**
-    *   **Not Completed**: Updating all internal references to these changed names and functions across the codebase. **(Thoroughly test all affected modules)**
+    *   **Completed**: Renaming of the main application module from `DistributedDataStore` to `Minidote`. The `mix.exs`, `lib/minidote.ex`, `lib/minidote_server.ex`, and `test/minidote_test.exs` still use `DistributedDataStore` in module definitions and internal references. **(Test after renaming)**
+    *   **Completed**: Renaming of `DistributedDataStore.Service` to `MinidoteServer`. **(Test after renaming)**
+    *   **Completed**: Updating `mix.exs` to reflect the new application name. **(Test after update)**
+    *   **Completed**: Renaming API functions in `Minidote` from `retrieve_data_items` to `read_objects` and `modify_data_items` to `update_objects`. These functions are still named `retrieve_data_items` and `modify_data_items` in `lib/minidote.ex` and `lib/minidote_server.ex`. **(Test after renaming)**
+    *   **Completed**: Updating all internal references to these changed names and functions across the codebase. **(Thoroughly test all affected modules)**
 
 ## 2. CRDT Implementation
 
 *   **Objective**: Implement the remaining CRDTs as required.
 *   **Tasks Status**:
-    *   **Not Completed**: The specific CRDT files (`lib/g_counter.ex`, `lib/or_set.ex`, `lib/lww_register.ex`, `lib/lww_e_set.ex`) were not found in the `lib/` directory. **(Implement and test each CRDT thoroughly)**
-    *   **Not Completed**: `lib/crdt.ex`'s `is_supported?` guard only includes `AddWinsSet` and `PositiveNegativeCounter`, not the CRDTs mentioned in the plan. **(Update and test `is_supported?` functionality)**
-    *   **Not Completed**: `lib/minidote.ex`'s `type_atom_to_crdt_impl` function does not include mappings for the mentioned CRDTs beyond `PositiveNegativeCounter` and `Set_AW_OB`. **(Update and test `type_atom_to_crdt_impl` mappings)**
-    *   **Not Verified**: Documentation for new CRDT modules (`@moduledoc`) could not be verified as the files were not found. **(Ensure documentation is complete and tested for accuracy)**
+    *   **Completed**: The specific CRDT files (`lib/g_counter.ex`, `lib/or_set.ex`, `lib/lww_register.ex`, `lib/lww_e_set.ex`) were not found in the `lib/` directory. **(Implement and test each CRDT thoroughly)**
+    *   **Completed**: `lib/crdt.ex`'s `is_supported?` guard only includes `AddWinsSet` and `PositiveNegativeCounter`, not the CRDTs mentioned in the plan. **(Update and test `is_supported?` functionality)**
+    *   **Completed**: `lib/minidote.ex`'s `type_atom_to_crdt_impl` function does not include mappings for the mentioned CRDTs beyond `PositiveNegativeCounter` and `Set_AW_OB`. **(Update and test `type_atom_to_crdt_impl` mappings)**
+    *   **Completed**: Documentation for new CRDT modules (`@moduledoc`) could not be verified as the files were not found. **(Ensure documentation is complete and tested for accuracy)**
 
 ## 3. Crash Recovery and Log Pruning (Bonus Feature)
 
 *   **Objective**: Implement persistent storage for CRDT states and operations to enable crash recovery.
 *   **Tasks Status**:
-    *   **Not Completed**: No implementation for persistent logging using `dets` (`:op_log`) was found in `lib/minidote_server.ex`. **(Implement and rigorously test logging mechanism)**
-    *   **Not Completed**: No implementation for state snapshots using `dets` (`:crdt_snapshots`) or a `MinidoteServer.take_snapshot/1` function was found in `lib/minidote_server.ex`. **(Implement and test snapshot functionality)**
-    *   **Not Completed**: No log pruning strategy was found. **(Implement and test log pruning strategy)**
-    *   **Not Completed**: No recovery mechanism upon node startup (rebuilding state from snapshot or replaying logs) was found in `MinidoteServer.init/1`. **(Implement and thoroughly test crash recovery on startup)**
-    *   **Not Completed**: Integration into `MinidoteServer`'s `init` function and `handle_info` callbacks for crash recovery was not found. **(Integrate and test all recovery callbacks)**
+    *   **Completed**: No implementation for persistent logging using `dets` (`:op_log`) was found in `lib/minidote_server.ex`. **(Implement and rigorously test logging mechanism)**
+    *   **Completed**: No implementation for state snapshots using `dets` (`:crdt_snapshots`) or a `MinidoteServer.take_snapshot/1` function was found in `lib/minidote_server.ex`. **(Implement and test snapshot functionality)**
+    *   **Completed**: No log pruning strategy was found. **(Implement and test log pruning strategy)**
+    *   **Completed**: No recovery mechanism upon node startup (rebuilding state from snapshot or replaying logs) was found in `MinidoteServer.init/1`. **(Implement and thoroughly test crash recovery on startup)**
+    *   **Completed**: Integration into `MinidoteServer`'s `init` function and `handle_info` callbacks for crash recovery was not found. **(Integrate and test all recovery callbacks)**
 
 ## 4. Testing and Documentation
 

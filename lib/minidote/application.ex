@@ -12,10 +12,10 @@ defmodule Minidote.Application do
     change_cookie()
 
     children = [
-      # Starts a worker by calling: Minidote.Worker.start_link(MinidoteServer)
-      # The Minidote service will then be locally available under the name MinidoteServer
+      # Starts a worker by calling: DistributedDataStore.Worker.start_link(DistributedDataStore.Service)
+      # The DistributedDataStore service will then be locally available under the name DistributedDataStore.Service
       # Example call:
-      # GenServer.call(MinidoteServer, :do_something)
+      # GenServer.call(DistributedDataStore.Service, :do_something)
       {MinidoteServer, MinidoteServer}
     ]
 

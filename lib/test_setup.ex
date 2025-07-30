@@ -38,8 +38,8 @@ defmodule TestSetup do
   # # helper function to start multiple nodes at once, uncomment if needed
   # @spec start(integer()) :: list()
   # def start(num_nodes) do
-  #   Logger.notice("Booting #{num_nodes} distributed nodes with prefix :distributed_data_store")
-  #   name = :distributed_data_store
+  #   Logger.notice("Booting #{num_nodes} distributed nodes with prefix :minidote")
+  #   name = :minidote
   #   cookie = :erlang.get_cookie()
   #   nodes = Enum.map(1..num_nodes, fn i ->
   #       {:ok, name} =

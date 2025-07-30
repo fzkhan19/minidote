@@ -37,11 +37,11 @@ defmodule MinidoteTest do
 
     # increment counter by 42
     # When using Erlang rpc calls, the module name needs to be specified. Elixir modules are converted into Erlang modules via a $ModuleName -> :"Elixir.ModuleName" transformation
-    {:ok, vc} = :rpc.call(dc1, :"Elixir.Minidote", :update_objects, [[{{"key", :counter_pn_ob, "simple counter replication"}, :increment, 42}], :ignore])
+    {:ok, vc} = :rpc.call(dc1, :"Elixir.Minidote", :modify_data_items, [[{{"key", :counter_pn_ob, "simple counter replication"}, :increment, 42}], :ignore])
     # reading on the same replica returns 42
-    {:ok, [{{"key", :counter_pn_ob, "simple counter replication"}, 42}], _vc2} = :rpc.call(dc1, :"Elixir.Minidote", :read_objects, [[{"key", :counter_pn_ob, "simple counter replication"}], vc])
+    {:ok, [{{"key", :counter_pn_ob, "simple counter replication"}, 42}], _vc2} = :rpc.call(dc1, :"Elixir.Minidote", :retrieve_data_items, [[{"key", :counter_pn_ob, "simple counter replication"}], vc])
     # reading on the other replica returns 42
-    {:ok, [{{"key", :counter_pn_ob, "simple counter replication"}, 42}], _vc2} = :rpc.call(dc2, :"Elixir.Minidote", :read_objects, [[{"key", :counter_pn_ob, "simple counter replication"}], vc])
+    {:ok, [{{"key", :counter_pn_ob, "simple counter replication"}, 42}], _vc2} = :rpc.call(dc2, :"Elixir.Minidote", :retrieve_data_items, [[{"key", :counter_pn_ob, "simple counter replication"}], vc])
 
     # tear down all nodes
     [TestSetup.stop_node(dc1), TestSetup.stop_node(dc2)]
