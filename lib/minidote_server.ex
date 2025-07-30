@@ -4,24 +4,87 @@ defmodule MinidoteServer do
   require ConflictFreeReplicatedDataType
 
   @moduledoc """
-  The API documentation for `MinidoteServer`.
-  A distributed key-value store that works with CausalBroadcast and CRDTs.
+  `MinidoteServer` acts as the core distributed key-value store for Minidote.
+  It is implemented as a `GenServer` and is responsible for managing CRDT objects,
+  handling client requests for reads and updates, ensuring causal consistency
+  through vector clocks, and propagating updates via a causal broadcast mechanism.
+
+  This server also supports session guarantees and crash recovery by persisting
+  operations and CRDT snapshots using Erlang's DETS.
   """
 
-
   # Public API
+  @doc """
+  Starts the MinidoteServer as a linked GenServer process.
+
+  This function initializes the server with a unique `service_name` and
+  configures its persistence and communication parameters. It also attempts
+  to recover its state from persistent storage upon startup.
+
+  ## Parameters
+    - `service_name`: The atom name to register the GenServer process under.
+    - `opts`: A keyword list of options, including:
+      - `:op_log_name`: Name for the persistent operation log (default: `:op_log`).
+      - `:crdt_snapshots_name`: Name for the persistent CRDT snapshots (default: `:crdt_snapshots`).
+      - `:link_group_name`: Name for the causal broadcast link group (default: `:minidote_link_group`).
+      - `:snapshot_interval`: Interval for periodic snapshots (default: `timer:minutes(1)`).
+
+  ## Returns
+    - `{:ok, pid}`: If the server starts successfully, where `pid` is the process ID of the server.
+    - `{:error, reason}`: If the server fails to start.
+  """
+  @spec start_link(atom(), Keyword.t()) :: {:ok, pid()} | {:error, any()}
   def start_link(service_name, opts \\ []) do
     GenServer.start_link(__MODULE__, Keyword.put(opts, :service_name, service_name), name: service_name)
   end
 
+  @doc """
+  Retrieves the value associated with a given key from the server.
+  (This is part of an older, simpler API and might be superseded by `retrieve_data_items/3`).
+
+  ## Parameters
+    - `service`: The name or PID of the MinidoteServer.
+    - `key`: The key to retrieve.
+
+  ## Returns
+    - `{:ok, value}`: If the key is found.
+    - `{:ok, :not_found}`: If the key is not found.
+  """
+  @spec retrieve(GenServer.server(), any()) :: {:ok, any()}
   def retrieve(service, key) do
     GenServer.call(service, {:retrieve, key})
   end
 
+  @doc """
+  Stores a key-value pair on the server.
+  (This is part of an older, simpler API and might be superseded by `modify_data_items/3`).
+
+  ## Parameters
+    - `service`: The name or PID of the MinidoteServer.
+    - `key`: The key to store.
+    - `value`: The value to associate with the key.
+
+  ## Returns
+    - `:ok`: On successful storage.
+  """
+  @spec store(GenServer.server(), any(), any()) :: :ok
   def store(service, key, value) do
     GenServer.call(service, {:store, key, value})
   end
 
+  @doc """
+  Initiates an immediate snapshot of the CRDT states to persistent storage.
+
+  This function triggers the server to write its current database state to the
+  configured snapshot file and clears the operation log.
+
+  ## Parameters
+    - `service`: The name or PID of the MinidoteServer.
+
+  ## Returns
+    - `:ok`: On successful snapshot.
+  """
+  @spec take_snapshot(GenServer.server()) :: :ok
   def take_snapshot(service) do
     GenServer.call(service, :take_snapshot)
   end
@@ -65,8 +128,33 @@ defmodule MinidoteServer do
     {:ok, initial_state}
   end
 
-  # Handle CRDT read_objects requests
+  @doc """
+  Handles client requests to retrieve CRDT objects (`retrieve_data_items/3`).
+
+  This `handle_call` clause processes read requests from clients, potentially
+  waiting if session guarantees are not met. If the `client_clock` is not
+  `nil` and is not less than or equal to the server's current clock, the
+  request is queued until the server's clock advances sufficiently.
+
+  ## Parameters
+    - `{:retrieve_data_items, objects, client_clock}`: The request tuple.
+      - `objects`: A list of `Minidote.data_key()` tuples to retrieve.
+      - `client_clock`: The `Minidote.version_token()` provided by the client.
+    - `from`: The caller's `GenServer.from()` tuple.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:reply, {:ok, results, new_clock}, new_state}`: If session guarantees are met,
+      returns the retrieved objects and the server's current clock.
+    - `{:noreply, new_state}`: If session guarantees are not met, the request is
+      queued and the server does not reply immediately.
+  """
   @impl true
+  @spec handle_call(
+          {:retrieve_data_items, [Minidote.data_key()], Minidote.version_token()},
+          GenServer.from(),
+          map()
+        ) :: {:reply, {:ok, [{Minidote.data_key(), Minidote.item_value()}], map()}, map()} | {:noreply, map()}
   def handle_call({:retrieve_data_items, objects, client_clock}, from, state) do
     # Check session guarantees
     if client_clock == :ignore or Vector_Clock.leq(client_clock, state.clock) do
@@ -98,8 +186,34 @@ defmodule MinidoteServer do
     end
   end
 
-  # Handle CRDT update_objects requests
+  @doc """
+  Handles client requests to modify CRDT objects (`modify_data_items/3`).
+
+  This `handle_call` clause processes update requests from clients, potentially
+  waiting if session guarantees are not met. If the `client_clock` is not
+  `nil` and is not less than or equal to the server's current clock, the
+  request is queued until the server's clock advances sufficiently.
+
+  ## Parameters
+    - `{:modify_data_items, updates, client_clock}`: The request tuple.
+      - `updates`: A list of `Minidote.modifications()` tuples.
+      - `client_clock`: The `Minidote.version_token()` provided by the client.
+    - `from`: The caller's `GenServer.from()` tuple.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:reply, {:ok, new_clock}, new_state}`: If session guarantees are met,
+      processes the updates and returns the server's new clock.
+    - `{:noreply, new_state}`: If session guarantees are not met, the request is
+      queued and the server does not reply immediately.
+  """
   @impl true
+  @spec handle_call(
+          {:modify_data_items, [{Minidote.data_key(), Minidote.item_operation(), Minidote.operation_args()}],
+           Minidote.version_token()},
+          GenServer.from(),
+          map()
+        ) :: {:reply, {:ok, map()}, map()} | {:noreply, map()}
   def handle_call({:modify_data_items, updates, client_clock}, from, state) do
     # Check session guarantees
     if client_clock == :ignore or Vector_Clock.leq(client_clock, state.clock) do
@@ -112,16 +226,38 @@ defmodule MinidoteServer do
     end
   end
 
-  # Handle read requests (original simple API)
+  @doc """
+  Handles an older API call for retrieving a single key.
+
+  ## Parameters
+    - `{:retrieve, key}`: The request tuple.
+    - `_from`: The caller's `GenServer.from()` tuple (unused).
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:reply, {:ok, value}, new_state}`: The retrieved value or `:not_found`.
+  """
   @impl true
+  @spec handle_call({:retrieve, any()}, GenServer.from(), map()) :: {:reply, {:ok, any()}, map()}
   def handle_call({:retrieve, key}, _from, state) do
     value = Map.get(state.db, key, :not_found)
     Logger.debug("Retrieved key=#{key}, value=#{inspect(value)}")
     {:reply, {:ok, value}, state}
   end
 
-  # Handle store requests (original simple API)
+  @doc """
+  Handles an older API call for storing a single key-value pair.
+
+  ## Parameters
+    - `service`: The name or PID of the MinidoteServer.
+    - `key`: The key to store.
+    - `value`: The value to associate with the key.
+
+  ## Returns
+    - `:ok`: On successful storage.
+  """
   @impl true
+  @spec handle_call({:store, any(), any()}, GenServer.from(), map()) :: {:reply, :ok, map()}
   def handle_call({:store, key, value}, _from, state) do
     # Update local database
     new_db = Map.put(state.db, key, value)
@@ -134,7 +270,23 @@ defmodule MinidoteServer do
     {:reply, :ok, new_state}
   end
 
+  @doc """
+  Handles requests to take a snapshot of the CRDT states.
+
+  This `handle_call` is used internally and can be triggered by `take_snapshot/1`
+  or periodically. It writes the current CRDT database to disk and clears the
+  operation log.
+
+  ## Parameters
+    - `:take_snapshot`: The request atom.
+    - `_from`: The caller's `GenServer.from()` tuple (unused).
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:reply, :ok, new_state}`: Always `:ok` on successful snapshot.
+  """
   @impl true
+  @spec handle_call(:take_snapshot, GenServer.from(), map()) :: {:reply, :ok, map()}
   def handle_call(:take_snapshot, _from, state) do
     Logger.info("Taking CRDT snapshot...")
     :dets.delete_all_objects(state.crdt_snapshots) # Clear previous snapshot
@@ -151,8 +303,21 @@ defmodule MinidoteServer do
     {:reply, :ok, state}
   end
 
-  # Catch-all for other calls
+  @doc """
+  Handles any unhandled `GenServer.call` messages.
+
+  Logs a warning for unexpected calls.
+
+  ## Parameters
+    - `msg`: The unhandled message.
+    - `_from`: The caller's `GenServer.from()` tuple (unused).
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:reply, {:error, :not_implemented}, state}`: An error indicating the call is not implemented.
+  """
   @impl true
+  @spec handle_call(any(), GenServer.from(), map()) :: {:reply, {:error, :not_implemented}, map()}
   def handle_call(msg, _from, state) do
     Logger.warning("Unhandled call: #{inspect(msg)}")
     {:reply, {:error, :not_implemented}, state}
@@ -164,13 +329,53 @@ defmodule MinidoteServer do
     {:noreply, state}
   end
 
+  @doc """
+  Handles internal messages to trigger a snapshot.
+
+  This `handle_info` clause is used internally for periodic snapshots. It
+  delegates to the `handle_call(:take_snapshot, ...)` function.
+
+  ## Parameters
+    - `:take_snapshot`: The message atom.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:noreply, new_state}`: The updated state after the snapshot.
+  """
   @impl true
+  @spec handle_info(:take_snapshot, map()) :: {:noreply, map()}
   def handle_info(:take_snapshot, state) do
     # Call the handle_call version of take_snapshot
     handle_call(:take_snapshot, :no_from, state)
   end
 
+  @doc """
+  Handles incoming CRDT update messages delivered via causal broadcast.
+
+  This `handle_info` clause applies a remote CRDT effect to the local database,
+  merges the vector clocks, and logs the operation. It also checks for and
+  processes any waiting client requests whose session guarantees can now be met.
+
+  ## Parameters
+    - `{:deliver, {:crdt_update, full_key, crdt_type_atom, crdt_type, effect, sender_clock, sender_node}}`: The delivered message.
+      - `full_key`: The `Minidote.data_key()` of the updated CRDT.
+      - `crdt_type_atom`: The atom representation of the CRDT type.
+      - `crdt_type`: The CRDT module.
+      - `effect`: The `ConflictFreeReplicatedDataType.crdt_propagation_effect()` to apply.
+      - `sender_clock`: The `Vector_Clock.t()` of the sender.
+      - `sender_node`: The node from which the update originated.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:noreply, new_state}`: The updated state after applying the effect and processing waiting requests.
+  """
   @impl true
+  @spec handle_info(
+          {:deliver,
+           {:crdt_update, Minidote.data_key(), atom(), ConflictFreeReplicatedDataType.crdt_module(),
+            ConflictFreeReplicatedDataType.crdt_propagation_effect(), map(), node()}},
+          map()
+        ) :: {:noreply, map()}
   def handle_info({:deliver, {:crdt_update, full_key, crdt_type_atom, crdt_type, effect, sender_clock, sender_node}}, state) do
     # Get current CRDT state or create new one
     current_crdt = Map.get(state.db, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
@@ -198,7 +403,26 @@ defmodule MinidoteServer do
     end
   end
 
+  @doc """
+  Handles incoming CRDT update messages delivered via causal broadcast (backward compatibility).
+
+  This `handle_info` clause is similar to the above but handles an older format
+  where `crdt_type` was directly the module instead of an atom.
+
+  ## Parameters
+    - `{:deliver, {:crdt_update, full_key, crdt_type, effect, sender_clock, sender_node}}`: The delivered message.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:noreply, new_state}`: The updated state after applying the effect and processing waiting requests.
+  """
   @impl true
+  @spec handle_info(
+          {:deliver,
+           {:crdt_update, Minidote.data_key(), ConflictFreeReplicatedDataType.crdt_module(),
+            ConflictFreeReplicatedDataType.crdt_propagation_effect(), map(), node()}},
+          map()
+        ) :: {:noreply, map()}
   def handle_info({:deliver, {:crdt_update, full_key, crdt_type, effect, sender_clock, sender_node}}, state) do
     # Assume crdt_type is already the module (backward compatibility)
     crdt_type_atom = Minidote.get_crdt_atom(crdt_type)
@@ -225,7 +449,19 @@ defmodule MinidoteServer do
     end
   end
 
+  @doc """
+  Handles incoming simple store messages delivered via causal broadcast.
+  (Backward compatibility for older API).
+
+  ## Parameters
+    - `{:deliver, {:store, key, value}}`: The delivered message.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:noreply, new_state}`: The updated state after applying the store operation.
+  """
   @impl true
+  @spec handle_info({:deliver, {:store, any(), any()}}, map()) :: {:noreply, map()}
   def handle_info({:deliver, {:store, key, value}}, state) do
     # Apply the remote store to our database
     new_db = Map.put(state.db, key, value)
@@ -235,13 +471,37 @@ defmodule MinidoteServer do
     {:noreply, new_state}
   end
 
+  @doc """
+  Handles any unhandled `GenServer.handle_info` messages.
+
+  Logs a warning for unexpected info messages.
+
+  ## Parameters
+    - `msg`: The unhandled message.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:noreply, state}`: The unchanged state.
+  """
   @impl true
+  @spec handle_info(any(), map()) :: {:noreply, map()}
   def handle_info(msg, state) do
     Logger.warning("Unhandled info message: #{inspect(msg)}")
     {:noreply, state}
   end
 
+  @doc """
+  Cleans up persistent storage (`op_log` and `crdt_snapshots`) when the GenServer terminates.
+
+  ## Parameters
+    - `_reason`: The reason for termination (unused).
+    - `state`: The final state of the GenServer.
+
+  ## Returns
+    - `:ok`: Always `:ok`.
+  """
   @impl true
+  @spec terminate(any(), map()) :: :ok
   def terminate(_reason, state) do
     Logger.info("Closing op_log dets table and crdt_snapshots table.")
     :dets.close(state.op_log)
@@ -250,8 +510,18 @@ defmodule MinidoteServer do
   end
 
   @doc """
-  Waits until the MinidoteServer with the given name is ready.
+  Waits until the MinidoteServer with the given name is ready and responsive.
+
+  This function continuously checks for the server's registration and then
+  pings it to ensure it's fully initialized before proceeding.
+
+  ## Parameters
+    - `service_name`: The registered name of the MinidoteServer.
+
+  ## Returns
+    - `:ok`: If the server is ready.
   """
+  @spec wait_until_ready(atom()) :: :ok
   def wait_until_ready(service_name) do
     Logger.debug("Waiting for MinidoteServer #{inspect(service_name)} to be ready on node #{node()}")
     :ok = GenServer.whereis(service_name)
@@ -267,7 +537,27 @@ defmodule MinidoteServer do
 
   # Private helper functions
 
-  # Process update_objects request
+  @doc """
+  Processes a list of item modifications, applying them locally and broadcasting them.
+
+  This function is called by `handle_call({:modify_data_items, ...})` when session
+  guarantees are met. It increments the local vector clock, applies each update
+  atomically, computes and broadcasts the propagation effects, and then replies
+  to the original caller.
+
+  ## Parameters
+    - `modifications`: A list of `Minidote.modifications()` tuples.
+    - `state`: The current state of the GenServer.
+    - `from`: The caller's `GenServer.from()` tuple.
+
+  ## Returns
+    - `{:noreply, new_state}`: The updated state of the GenServer.
+  """
+  @spec process_item_modifications(
+          [{Minidote.data_key(), Minidote.item_operation(), Minidote.operation_args()}],
+          map(),
+          GenServer.from()
+        ) :: {:noreply, map()}
   defp process_item_modifications(modifications, state, from) do
     # Increment local clock for this update operation
     new_clock = Vector_Clock.increment(state.clock, node())
@@ -331,7 +621,20 @@ defmodule MinidoteServer do
     {:noreply, final_state}
   end
 
-  # Check if any waiting requests can now be processed
+  @doc """
+  Checks and processes any queued client requests that can now meet their session guarantees.
+
+  This function is called after the server's clock has advanced (e.g., after applying
+  a local or remote update). It iterates through `waiting_requests` and processes
+  any that now satisfy their `client_clock` requirement.
+
+  ## Parameters
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `map()`: The updated state of the GenServer after processing requests.
+  """
+  @spec check_waiting_requests(map()) :: map()
   defp check_waiting_requests(state) do
     {ready_requests, still_waiting} =
       Enum.split_with(state.waiting_requests, fn
@@ -374,7 +677,21 @@ defmodule MinidoteServer do
     final_state
   end
 
-  # Recovery function
+  @doc """
+  Recovers the MinidoteServer's state from persistent storage (`op_log` and `crdt_snapshots`).
+
+  This function loads the latest CRDT snapshot and then replays any subsequent
+  operations from the `op_log` to reconstruct the most up-to-date state.
+
+  ## Parameters
+    - `op_log_name`: The name of the operation log DETS file.
+    - `crdt_snapshots_name`: The name of the CRDT snapshots DETS file.
+
+  ## Returns
+    - `{map(), map()}`: A tuple containing the recovered database (`db`) and
+      the reconstructed vector clock (`clock`).
+  """
+  @spec recover_from_persistence(atom(), atom()) :: {map(), map()}
   defp recover_from_persistence(op_log_name, crdt_snapshots_name) do
     Logger.info("Attempting to recover state from persistent storage...")
 
