@@ -18,6 +18,7 @@ defmodule CausalBroadcast do
     - `:owner` (required): The PID of the process that will receive delivered messages.
     - `:link_group_name` (optional): The name of the link group used by the LinkLayer.
   """
+  @spec start_link(atom(), Keyword.t()) :: {:ok, pid()} | {:error, any()}
   def start_link(name, opts) do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
@@ -25,16 +26,21 @@ defmodule CausalBroadcast do
   @doc """
   Broadcasts a message to all other nodes in the cluster.
 
-  `name` - The registered name of the CausalBroadcast GenServer.
-  `message` - The message to broadcast.
+  The message is tagged with the sender's current vector clock and node ID to ensure
+  causal ordering. The broadcast is asynchronous and uses the underlying LinkLayer
+  for message transmission.
+
+  ## Parameters
+    - `name`: The registered name of the CausalBroadcast GenServer.
+    - `message`: The message to broadcast. Can be any Elixir term.
   """
+  @spec broadcast(atom(), any()) :: :ok
   def broadcast(name, message) do
     GenServer.cast(name, {:broadcast, message})
   end
 
   # -- GenServer Callbacks --
 
-  @impl true
   @impl true
   @doc """
   Initializes the CausalBroadcast GenServer.
@@ -43,6 +49,7 @@ defmodule CausalBroadcast do
   and initializes the state with the LinkLayer PID, a new VectorClock, an empty buffer,
   the owner PID, and the GenServer name.
   """
+  @spec init(Keyword.t()) :: {:ok, map()}
   def init(opts) do
     # Get the owner PID from options (the process that will receive delivered messages)
     owner_pid = Keyword.get(opts, :owner, self())
@@ -67,15 +74,22 @@ defmodule CausalBroadcast do
     {:ok, initial_state}
   end
 
-  # Handle broadcast requests
   @impl true
   @doc """
-  Handles the `:broadcast` cast.
+  Handles the `:broadcast` cast message.
 
-  Increments the local vector clock, tags the message with the clock and sender node,
-  sends the tagged message to all other nodes via the LinkLayer, and updates the state
-  with the incremented vector clock.
+  Increments the local vector clock for the current node, tags the message with
+  this new clock and the sender's node ID, and then sends the tagged message
+  to all other nodes in the cluster via the LinkLayer.
+
+  ## Parameters
+    - `{:broadcast, message}`: The cast message containing the payload to broadcast.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:noreply, new_state}`: The updated state with the incremented vector clock.
   """
+  @spec handle_cast({:broadcast, any()}, map()) :: {:noreply, map()}
   def handle_cast({:broadcast, message}, state) do
     # Get this node's name (Elixir node name)
     this_node = node()
@@ -100,23 +114,31 @@ defmodule CausalBroadcast do
         Logger.warning("Failed to get other nodes for broadcast")
     end
 
-
-
     # Update state
     {:noreply, %{state | vector_clock: new_clock}}
   end
 
-  # Handle remote messages
   @impl true
   @doc """
-  Handles incoming messages from the LinkLayer.
+  Handles incoming messages from the LinkLayer that include sender clock and node.
 
   If the message is causally ready (as determined by `message_is_ready?/3`), it is
   delivered to the owner process, the local vector clock is merged with the sender's
   clock, and the buffer is processed to see if any buffered messages are now ready.
 
   If the message is not causally ready, it is added to the buffer for later processing.
+
+  ## Parameters
+    - `{:remote, {message, sender_clock, sender_node}}`: The incoming message from the LinkLayer.
+      - `message`: The actual payload of the broadcast message.
+      - `sender_clock`: The vector clock of the sender at the time of broadcast.
+      - `sender_node`: The node from which the message originated.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:noreply, new_state}`: The updated state of the GenServer.
   """
+  @spec handle_info({:remote, {any(), map(), node()}}, map()) :: {:noreply, map()}
   def handle_info({:remote, {message, sender_clock, sender_node}}, state) do
     if message_is_ready?(sender_clock, sender_node, state.vector_clock) do
       # Message is causally ready - deliver it to the owner
@@ -139,9 +161,20 @@ defmodule CausalBroadcast do
   @doc """
   Handles incoming messages from the LinkLayer (fallback for old 2-tuple format).
 
-  This function is for backward compatibility with older versions of the system. It attempts to infer the sender node from the clock,
-  and if successful and the message is causally ready, it delivers the message and merges the clocks. Otherwise, it buffers the message.
+  This function is for backward compatibility with older versions of the system. It attempts
+  to infer the sender node from the clock. If successful and the message is causally ready,
+  it delivers the message and merges the clocks. Otherwise, it buffers the message.
+
+  ## Parameters
+    - `{:remote, {message, sender_clock}}`: The incoming message from the LinkLayer.
+      - `message`: The actual payload of the broadcast message.
+      - `sender_clock`: The vector clock of the sender at the time of broadcast.
+    - `state`: The current state of the GenServer.
+
+  ## Returns
+    - `{:noreply, new_state}`: The updated state of the GenServer.
   """
+  @spec handle_info({:remote, {any(), map()}}, map()) :: {:noreply, map()}
   def handle_info({:remote, {message, sender_clock}}, state) do
     # Try to infer sender from clock, since older versions didn't send the sender node
     sender_node = infer_sender_from_clock(sender_clock, state.vector_clock)
@@ -160,13 +193,11 @@ defmodule CausalBroadcast do
 
   # -- Helper Functions --
 
-  @doc """
-  Checks if a message is causally ready to be delivered.
-
-  A message from sender S with clock C is causally ready if:
-  1.  C[S] = local_clock[S] + 1 (The sender's clock value for the sender node is one greater than the local clock's value for the sender node.)
-  2.  For all other nodes N: C[N] <= local_clock[N] (The sender's clock value for all other nodes is less than or equal to the local clock's value for those nodes.)
-  """
+  # Checks if a message is causally ready to be delivered.
+  #
+  # A message from sender S with clock C is causally ready if:
+  # 1.  C[S] = local_clock[S] + 1 (The sender's clock value for the sender node is one greater than the local clock's value for the sender node.)
+  # 2.  For all other nodes N: C[N] <= local_clock[N] (The sender's clock value for all other nodes is less than or equal to the local clock's value for those nodes.)
   defp message_is_ready?(sender_clock, sender_node, local_clock) do
     # For causal ordering, a message from sender S with clock C is ready if:
     # 1. For the sender node: C[S] = local_clock[S] + 1
@@ -192,13 +223,11 @@ defmodule CausalBroadcast do
     end
   end
 
-  @doc """
-  Infers the sender node from the clock differences (fallback method).
-
-  This method is used when the sender node is not explicitly included in the message
-  (for backward compatibility). It finds the node whose clock value in the sender's
-  clock is exactly one greater than its value in the local clock.
-  """
+  # Inferred the sender node from the clock differences (fallback method).
+  #
+  # This method is used when the sender node is not explicitly included in the message
+  # (for backward compatibility). It finds the node whose clock value in the sender's
+  # clock is exactly one greater than its value in the local clock.
   defp infer_sender_from_clock(sender_clock, local_clock) do
     # Find the node whose clock value is exactly local + 1
     Enum.find_value(sender_clock, fn {node, value} ->
@@ -207,14 +236,12 @@ defmodule CausalBroadcast do
     end) || :unknown
   end
 
-  @doc """
-  Processes the message buffer to see if any buffered messages are now ready for delivery.
-
-  This function iterates through the buffer and checks if each message is causally ready.
-  Ready messages are delivered, and the vector clock is updated. The function then
-  recursively calls itself to process the remaining buffer in case delivering the
-  ready messages has made other messages ready as well.
-  """
+  # Processes the message buffer to see if any buffered messages are now ready for delivery.
+  #
+  # This function iterates through the buffer and checks if each message is causally ready.
+  # Ready messages are delivered, and the vector clock is updated. The function then
+  # recursively calls itself to process the remaining buffer in case delivering the
+  # ready messages has made other messages ready as well.
   defp process_buffer(state) do
     {ready_messages, remaining_buffer} =
       Enum.split_with(state.buffer, fn
@@ -239,12 +266,10 @@ defmodule CausalBroadcast do
     end
   end
 
-  @doc """
-  Delivers a list of buffered messages and updates the vector clock accordingly.
-
-  This function iterates through the list of messages, delivers each message to the
-  owner process, and merges the sender's vector clock into the local vector clock.
-  """
+  # Delivers a list of buffered messages and updates the vector clock accordingly.
+  #
+  # This function iterates through the list of messages, delivers each message to the
+  # owner process, and merges the sender's vector clock into the local vector clock.
   defp deliver_buffered_messages(messages, state) do
     Enum.reduce(messages, state, fn
       {message, sender_clock, _sender}, acc_state ->
