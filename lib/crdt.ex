@@ -1,11 +1,15 @@
 defmodule ConflictFreeReplicatedDataType do
   @moduledoc """
-  Documentation for `CRDT`.
+  Defines the behaviour for Conflict-Free Replicated Data Types (CRDTs).
 
-  This module defines types, callbacks for behaviours and the functions that use them.
-  It ensures only valid CRDTs are created.
-  New updates are created by local downstream operations and upon being received applied as updates.
-  The require_state_downstream callback states if the crdt's local state is needed to create the downstream effect / update or not.
+  This module defines the `@behaviour` for CRDTs, along with types, callbacks, and functions
+  that ensure only valid CRDTs are created and used within the system. It also outlines the
+  process for generating and applying updates to CRDTs.
+
+  The module emphasizes that new updates are created by local downstream operations and, upon
+  being received, applied as updates. Additionally, it explains that the `requires_state_for_effect`
+  callback indicates whether the CRDT's local state is necessary to create the downstream
+  effect or update.
 
   Naming pattern for CRDTs: <type>_<semantics>_<OB|SB>
 
@@ -34,48 +38,74 @@ defmodule ConflictFreeReplicatedDataType do
   @callback requires_state_for_effect(operation_payload :: operation_payload()) :: boolean()
   @callback are_equal(internal_representation(), internal_representation()) :: boolean()
 
-  # ToDo: Add new types as needed
+  @doc """
+  Guard to check if a given type is a supported CRDT.
+  """
   defguard is_supported?(type)
-           when type == AddWinsSet or
-                  type == PositiveNegativeCounter or
-                  type == GCounter or
-                  type == ORSet or
-                  type == LWWRegister or
-                  type == LWWEWSet
+           when type == AddWinsSet or # Add-wins set
+                  type == PositiveNegativeCounter or # PN-Counter
+                  type == GCounter or # Grow-only counter
+                  type == ORSet or # Observed-remove set
+                  type == LWWRegister or # Last-write-wins register
+                  type == LWWEWSet # Last-write-wins enable-wins set
 
+  @doc """
+  Creates a new instance of the given CRDT type.
+  """
   def create_new(type) when is_supported?(type) do
-    type.new()
+    type.new() # Calls the new/0 function defined in the specific CRDT module
   end
 
+  @doc """
+  Retrieves the current value of the CRDT.
+  """
   def get_current_value(type, state) do
-    type.retrieve_value(state)
+    type.retrieve_value(state) # Calls the retrieve_value/1 function defined in the specific CRDT module
   end
 
+  @doc """
+  Computes the propagation effect of an operation on the CRDT.
+  """
   def compute_propagation_effect(type, operation, state) do
-    type.generate_effect(operation, state)
+    type.generate_effect(operation, state) # Calls the generate_effect/2 function defined in the specific CRDT module
   end
 
+  @doc """
+  Applies a propagation effect to the CRDT's state.
+  """
   def apply_propagation_effect(type, effect, state) do
-    type.apply_effect(effect, state)
+    type.apply_effect(effect, state) # Calls the apply_effect/2 function defined in the specific CRDT module
   end
 
+  @doc """
+  Checks if the CRDT requires its state to compute the effect of an operation.
+  """
   def check_state_requirement_for_effect(type, operation) do
-    type.requires_state_for_effect(operation)
+    type.requires_state_for_effect(operation) # Calls the requires_state_for_effect/1 function defined in the specific CRDT module
   end
 
+  @doc """
+  Checks if two CRDT states are equal.
+  """
   def check_equality(type, state1, state2) do
-    type.are_equal(state1, state2)
+    type.are_equal(state1, state2) # Calls the are_equal/2 function defined in the specific CRDT module
   end
 
   @spec to_binary_representation(internal_representation()) :: binary()
+  @doc """
+  Converts an internal representation of a CRDT to a binary format.
+  """
   def to_binary_representation(term) do
-    :erlang.term_to_binary(term)
+    :erlang.term_to_binary(term) # Uses Erlang's term_to_binary for serialization
   end
 
   @spec from_binary_representation(binary()) :: {:ok, internal_representation()} | {:error, error_reason()}
+  @doc """
+  Converts a binary representation back to an internal representation of a CRDT.
+  """
   def from_binary_representation(binary) do
-    {:ok, :erlang.binary_to_term(binary)}
+    {:ok, :erlang.binary_to_term(binary)} # Uses Erlang's binary_to_term for deserialization
   rescue
-    _ -> {:error, :invalid_binary_format}
+    _ -> {:error, :invalid_binary_format} # Returns an error if the binary format is invalid
   end
 end
