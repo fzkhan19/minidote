@@ -1,4 +1,5 @@
 defmodule LWWRegister do
+  @behaviour ConflictFreeReplicatedDataType
   @moduledoc """
   `LWWRegister` (Last-Write-Wins Register) is a CRDT that stores a single value,
   where conflicts are resolved by comparing timestamps. The value with the
@@ -7,9 +8,17 @@ defmodule LWWRegister do
   """
 
   @doc """
+  Creates a new, empty `LWWRegister`.
+  """
+  @impl ConflictFreeReplicatedDataType
+  def new do
+    %{value: nil, timestamp: 0} # Default empty state
+  end
+
+  @doc """
   Creates a new `LWWRegister` with an initial value and timestamp.
   """
-  def new(value, timestamp) do
+  def create(value, timestamp) do
     %{value: value, timestamp: timestamp}
   end
 
@@ -48,5 +57,33 @@ defmodule LWWRegister do
       register1
     end
     end
+  end
+  @impl ConflictFreeReplicatedDataType
+  def apply_effect({{new_value, new_timestamp}, _sender_node}, register) do
+    if new_timestamp > register.timestamp do
+      {:ok, %{value: new_value, timestamp: new_timestamp}}
+    else
+      {:ok, register}
+    end
+  end
+
+  @impl ConflictFreeReplicatedDataType
+  def retrieve_value(register) do
+    register.value
+  end
+
+  @impl ConflictFreeReplicatedDataType
+  def generate_effect({:update, new_value, new_timestamp}, _register) do
+    {:ok, {new_value, new_timestamp}}
+  end
+
+  @impl ConflictFreeReplicatedDataType
+  def requires_state_for_effect({:update, _new_value, _new_timestamp}) do
+    false
+  end
+
+  @impl ConflictFreeReplicatedDataType
+  def are_equal(register1, register2) do
+    register1 == register2
   end
 end
