@@ -144,7 +144,7 @@ defmodule MinidoteServer do
   @impl true
   def handle_info(
         {:deliver,
-         {:crdt_update, full_key, _crdt_type_atom, crdt_type, effect, sender_clock, sender_node}},
+         {:crdt_update, full_key, crdt_type_atom, crdt_type, effect, sender_clock, sender_node}},
         state
       ) do
     # Get current CRDT state or create new one
@@ -161,12 +161,11 @@ defmodule MinidoteServer do
         Logger.debug("Applied remote CRDT update: key=#{inspect(full_key)}")
 
         # Log the operation received from remote
-        :dets.insert(state.op_log, {sender_clock, full_key, crdt_type, effect, sender_node})
+        :dets.insert(state.op_log, {sender_clock, full_key, crdt_type_atom, crdt_type, effect, sender_node})
 
         # Check waiting requests after clock update
         final_state = check_waiting_requests(new_state)
-        # Prune log after successful application of remote update
-        :dets.match_delete(state.op_log, {:"$1", :_, :_, :_, :_, :_}) # Simplified pruning for now
+        :dets.sync(state.op_log)
         {:noreply, final_state}
 
       {:error, reason} ->
@@ -182,6 +181,7 @@ defmodule MinidoteServer do
         state
       ) do
     # Assume crdt_type is already the module (backward compatibility)
+    crdt_type_atom = Minidote.get_crdt_atom(crdt_type)
     current_crdt = Map.get(state.db, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
 
     case ConflictFreeReplicatedDataType.apply_propagation_effect(crdt_type, {effect, sender_node}, current_crdt) do
@@ -193,11 +193,10 @@ defmodule MinidoteServer do
         Logger.debug("Applied remote CRDT update (old format): key=#{inspect(full_key)}")
 
         # Log the operation received from remote (for backward compatibility)
-        :dets.insert(state.op_log, {sender_clock, full_key, crdt_type, effect, sender_node})
+        :dets.insert(state.op_log, {sender_clock, full_key, crdt_type_atom, crdt_type, effect, sender_node})
 
         final_state = check_waiting_requests(new_state)
-        # Prune log after successful application of remote update
-        :dets.match_delete(state.op_log, {:"$1", :_, :_, :_, :_, :_}) # Simplified pruning for now
+        :dets.sync(state.op_log)
         {:noreply, final_state}
 
       {:error, reason} ->
@@ -269,6 +268,7 @@ defmodule MinidoteServer do
                 new_effects = [{full_key, crdt_type_atom, crdt_type, effect} | effects_acc]
                 # Log the operation
                 :dets.insert(state.op_log, {new_clock, full_key, crdt_type_atom, crdt_type, effect, node()})
+                :dets.sync(state.op_log)
                 {new_db, new_effects}
 
               {:error, reason} ->
@@ -289,10 +289,7 @@ defmodule MinidoteServer do
       )
     end
 
-    # Prune op_log after successful broadcast and local application
-    # This is a simplified approach; in a real distributed system,
-    # pruning would occur after confirmation from all replicas.
-    :dets.match_delete(state.op_log, {:"$1", :_, :_, :_, :_, :_}) # Delete all entries for now
+    # Pruning will be handled by a dedicated log pruning strategy later.
 
     new_state = %{state | db: new_db, clock: new_clock}
 

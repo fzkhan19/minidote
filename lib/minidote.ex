@@ -164,4 +164,14 @@ defmodule Minidote do
       :error -> raise ArgumentError, "Unknown CRDT type: #{inspect(type_atom)}"
     end
   end
+
+  # Helper function to get the CRDT atom from the module
+  def get_crdt_atom(module) do
+    Atom.to_string(module)
+    |> String.split(".")
+    |> List.last()
+    |> String.to_atom()
+    |> String.downcase()
+    |> String.to_atom()
+  end
 end
