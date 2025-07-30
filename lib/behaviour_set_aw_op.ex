@@ -58,7 +58,7 @@ defmodule AddWinsSet do
     - `_current_state`: The current internal state (not used for add effect generation).
 
   ## Returns
-    - `{:ok, propagation_effect()}`: A tuple containing the add effect.
+    - `{:ok, propagation_effect()}`: A tuple containing the generated add effect.
   """
   @spec generate_effect({:add_element, any()}, internal_state()) :: {:ok, propagation_effect()}
   def generate_effect({:add_element, item_to_add}, _current_state) do
