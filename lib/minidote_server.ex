@@ -160,6 +160,9 @@ defmodule MinidoteServer do
 
         Logger.debug("Applied remote CRDT update: key=#{inspect(full_key)}")
 
+        # Log the operation received from remote
+        :dets.insert(state.op_log, {sender_clock, full_key, crdt_type, effect, sender_node})
+
         # Check waiting requests after clock update
         final_state = check_waiting_requests(new_state)
         # Prune log after successful application of remote update
@@ -188,6 +191,9 @@ defmodule MinidoteServer do
         new_state = %{state | db: new_db, clock: new_clock}
 
         Logger.debug("Applied remote CRDT update (old format): key=#{inspect(full_key)}")
+
+        # Log the operation received from remote (for backward compatibility)
+        :dets.insert(state.op_log, {sender_clock, full_key, crdt_type, effect, sender_node})
 
         final_state = check_waiting_requests(new_state)
         # Prune log after successful application of remote update
