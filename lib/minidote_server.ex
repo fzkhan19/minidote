@@ -1,10 +1,10 @@
-defmodule DistributedDataStore.Service do
+defmodule MinidoteServer do
   use GenServer
   require Logger
   require ConflictFreeReplicatedDataType
 
   @moduledoc """
-  The API documentation for `DistributedDataStore.Service`.
+  The API documentation for `MinidoteServer`.
   A distributed key-value store that works with CausalBroadcast and CRDTs.
   """
 
@@ -21,24 +21,35 @@ defmodule DistributedDataStore.Service do
     GenServer.call(service, {:store, key, value})
   end
 
+  def take_snapshot(service) do
+    GenServer.call(service, :take_snapshot)
+  end
+
   # GenServer Callbacks
   @impl true
   def init(_) do
     # Start the causal broadcast layer
     {:ok, bcast_pid} = CausalBroadcast.start_link(owner: self())
 
+    # Recover state from snapshot and replay logs
+    {recovered_db, recovered_clock} = recover_from_persistence()
+
     initial_state = %{
       # Simple key-value store for CRDT objects
-      db: %{},
+      db: recovered_db,
       # Reference to broadcast layer
       bcast: bcast_pid,
       # Vector clock for causality
-      clock: Vector_Clock.new(),
+      clock: recovered_clock,
       # Queue for requests waiting for session guarantees
-      waiting_requests: []
+      waiting_requests: [],
+      # Persistent log for operations
+      op_log: case :dets.open_file(:op_log, [type: :set, auto_save: 1000]) do {:ok, ref} -> ref end,
+      # Persistent storage for CRDT snapshots
+      crdt_snapshots: case :dets.open_file(:crdt_snapshots, [type: :set, auto_save: 1000]) do {:ok, ref} -> ref end
     }
 
-    Logger.info("Distributed data store service initiated")
+    Logger.info("MinidoteServer service initiated")
     {:ok, initial_state}
   end
 
@@ -51,7 +62,7 @@ defmodule DistributedDataStore.Service do
       results =
         Enum.map(objects, fn {_key, crdt_type_atom, _bucket} = full_key ->
           # Convert atom to actual CRDT module
-          crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
+          crdt_type = Minidote.get_crdt_implementation(crdt_type_atom)
 
           case Map.get(state.db, full_key) do
             nil ->
@@ -111,6 +122,17 @@ defmodule DistributedDataStore.Service do
     {:reply, :ok, new_state}
   end
 
+  @impl true
+  def handle_call(:take_snapshot, _from, state) do
+    Logger.info("Taking CRDT snapshot...")
+    :dets.delete_all_objects(state.crdt_snapshots) # Clear previous snapshot
+    Enum.each(state.db, fn {key, crdt_state} ->
+      :dets.insert(state.crdt_snapshots, {key, crdt_state})
+    end)
+    Logger.info("CRDT snapshot complete.")
+    {:reply, :ok, state}
+  end
+
   # Catch-all for other calls
   @impl true
   def handle_call(msg, _from, state) do
@@ -140,6 +162,8 @@ defmodule DistributedDataStore.Service do
 
         # Check waiting requests after clock update
         final_state = check_waiting_requests(new_state)
+        # Prune log after successful application of remote update
+        :dets.match_delete(state.op_log, {:"$1", :_, :_, :_, :_, :_}) # Simplified pruning for now
         {:noreply, final_state}
 
       {:error, reason} ->
@@ -166,6 +190,8 @@ defmodule DistributedDataStore.Service do
         Logger.debug("Applied remote CRDT update (old format): key=#{inspect(full_key)}")
 
         final_state = check_waiting_requests(new_state)
+        # Prune log after successful application of remote update
+        :dets.match_delete(state.op_log, {:"$1", :_, :_, :_, :_, :_}) # Simplified pruning for now
         {:noreply, final_state}
 
       {:error, reason} ->
@@ -183,6 +209,20 @@ defmodule DistributedDataStore.Service do
 
     Logger.debug("Applied remote store: key=#{key}, value=#{inspect(value)}")
     {:noreply, new_state}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    Logger.info("Closing op_log dets table and crdt_snapshots table.")
+    :dets.close(state.op_log)
+    :dets.close(state.crdt_snapshots)
+    :ok
+  end
+
+  # This is needed for clean shutdown when dets is used
+  @impl true
+  def handle_info(:system_continue, state) do
+    {:noreply, state}
   end
 
   @impl true
@@ -204,7 +244,7 @@ defmodule DistributedDataStore.Service do
                                                        operation, args},
                                                       {db_acc, effects_acc} ->
         # Convert atom to actual CRDT module
-        crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
+        crdt_type = Minidote.get_crdt_implementation(crdt_type_atom)
 
         # Get current CRDT state or create new one
         current_crdt = Map.get(db_acc, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
@@ -221,6 +261,8 @@ defmodule DistributedDataStore.Service do
                 new_db = Map.put(db_acc, full_key, new_crdt)
                 # Store effect for broadcasting (include both atom and module for compatibility)
                 new_effects = [{full_key, crdt_type_atom, crdt_type, effect} | effects_acc]
+                # Log the operation
+                :dets.insert(state.op_log, {new_clock, full_key, crdt_type_atom, crdt_type, effect, node()})
                 {new_db, new_effects}
 
               {:error, reason} ->
@@ -240,6 +282,11 @@ defmodule DistributedDataStore.Service do
         {:crdt_update, full_key, crdt_type_atom, crdt_type, effect, new_clock, node()}
       )
     end
+
+    # Prune op_log after successful broadcast and local application
+    # This is a simplified approach; in a real distributed system,
+    # pruning would occur after confirmation from all replicas.
+    :dets.match_delete(state.op_log, {:"$1", :_, :_, :_, :_, :_}) # Delete all entries for now
 
     new_state = %{state | db: new_db, clock: new_clock}
 
@@ -267,7 +314,7 @@ defmodule DistributedDataStore.Service do
           {:retrieve_data_items, objects, _client_clock, from} ->
             results =
               Enum.map(objects, fn {_key, crdt_type_atom, _bucket} = full_key ->
-                crdt_type = DistributedDataStore.get_crdt_implementation(crdt_type_atom)
+                crdt_type = Minidote.get_crdt_implementation(crdt_type_atom)
 
                 case Map.get(acc_state.db, full_key) do
                   nil ->
@@ -293,53 +340,52 @@ defmodule DistributedDataStore.Service do
 
     final_state
   end
-end
 
-# Simple example
-defmodule DistributedDataStore.SampleUsage do
-  def demonstration do
-    # Start service
-    {:ok, _process_id} = DistributedDataStore.Service.start_link(:my_service)
+  # Recovery function
+  defp recover_from_persistence() do
+    Logger.info("Attempting to recover state from persistent storage...")
 
-    # Store some information
-    :ok = DistributedDataStore.Service.store(:my_service, "entity_name", "Bob")
+    # Load snapshot
+    crdt_snapshots_ref = :dets.open_file(:crdt_snapshots, [type: :set])
+    db =
+      :dets.foldl(
+        fn {key, crdt_state}, acc ->
+          Map.put(acc, key, crdt_state)
+        end,
+        %{},
+        elem(crdt_snapshots_ref, 1)
+      )
 
-    # Retrieve it
-    {:ok, retrieved_value} = DistributedDataStore.Service.retrieve(:my_service, "entity_name")
-    IO.puts("Retrieved: #{retrieved_value}")
-  end
+    :dets.close(elem(crdt_snapshots_ref, 1))
+    Logger.info("Loaded CRDT snapshot. Replaying logs...")
 
-  def crdt_sample do
-    # Example using the CRDT API directly through the service
-    # This assumes the DistributedDataStore.Service is registered as DistributedDataStore.Service
-    version_token = Vector_Clock.new()
+    # Replay operations from op_log
+    op_log_ref = :dets.open_file(:op_log, [type: :set])
+    {final_db, final_clock} =
+      :dets.foldl(
+        fn {clock, full_key, _crdt_type_atom, crdt_type, effect, sender_node},
+           {acc_db, acc_clock} ->
+          current_crdt = Map.get(acc_db, full_key, ConflictFreeReplicatedDataType.create_new(crdt_type))
 
-    # Define a set key - use the atom representation
-    set_identifier = {"my_unique_set", :set_aw_op, "my_specific_domain"}
+          case ConflictFreeReplicatedDataType.apply_propagation_effect(
+                 crdt_type,
+                 {effect, sender_node},
+                 current_crdt
+               ) do
+            {:ok, new_crdt} ->
+              {Map.put(acc_db, full_key, new_crdt), Vector_Clock.merge(acc_clock, clock)}
 
-    # Perform modifications using GenServer.call directly
-    case GenServer.call(
-           DistributedDataStore.Service,
-           {:modify_data_items,
-            [
-              {set_identifier, :add_element, {"component_A", :marker1}}
-            ], version_token}
-         ) do
-      {:ok, updated_token} ->
-        # Retrieve the set
-        case GenServer.call(DistributedDataStore.Service, {:retrieve_data_items, [set_identifier], updated_token}) do
-          {:ok, results_data, _retrieval_token} ->
-            IO.inspect(results_data, label: "Set contents")
-            :ok
+            {:error, reason} ->
+              Logger.error("Failed to replay operation for #{inspect(full_key)}: #{inspect(reason)}")
+              {acc_db, acc_clock}
+          end
+        end,
+        {db, Vector_Clock.new()}, # Start with db from snapshot and empty clock
+        elem(op_log_ref, 1)
+      )
 
-          {:error, issue} ->
-            IO.puts("Failed to retrieve data items: #{inspect(issue)}")
-            {:error, issue}
-        end
-
-      {:error, issue} ->
-        IO.puts("Failed to modify data items: #{inspect(issue)}")
-        {:error, issue}
-    end
+    :dets.close(elem(op_log_ref, 1))
+    Logger.info("Log replay complete. Recovered state.")
+    {final_db, final_clock}
   end
 end

@@ -1,4 +1,4 @@
-defmodule DistributedDataStore do
+defmodule Minidote do
   require Logger
   require ConflictFreeReplicatedDataType
 
@@ -32,7 +32,7 @@ defmodule DistributedDataStore do
   end
 
   def start_service_link(service_name) do
-    DistributedDataStore.Service.start_link(service_name)
+    MinidoteServer.start_link(service_name)
   end
 
   @doc """
@@ -59,7 +59,7 @@ defmodule DistributedDataStore do
     case validate_data_keys(data_items) do
       :ok ->
         # Forward the call to the named GenServer
-        GenServer.call(DistributedDataStore.Service, {:retrieve_data_items, data_items, version_token})
+        GenServer.call(MinidoteServer, {:retrieve_data_items, data_items, version_token})
 
       {:error, reason} ->
         Logger.warning("#{node()}: Invalid data keys in retrieve_data_items: #{inspect(reason)}")
@@ -92,7 +92,7 @@ defmodule DistributedDataStore do
     case validate_item_modifications(modifications) do
       :ok ->
         # Forward the call to the named GenServer
-        GenServer.call(DistributedDataStore.Service, {:modify_data_items, modifications, version_token})
+        GenServer.call(MinidoteServer, {:modify_data_items, modifications, version_token})
 
       {:error, reason} ->
         Logger.warning("#{node()}: Invalid modifications in modify_data_items: #{inspect(reason)}")
