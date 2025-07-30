@@ -47,3 +47,4 @@ minidote-*.tar
 /tmp/
 
 op_log
+crdt_snapshots
