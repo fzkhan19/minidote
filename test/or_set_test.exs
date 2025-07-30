@@ -95,4 +95,60 @@ defmodule ORSetTest do
 
     assert merge1 == merge2
   end
+
+  test "apply_effect/2 adds an element with a tag" do
+    or_set = ORSet.new()
+    {:ok, or_set} = ORSet.apply_effect({{:add, "apple", "tag1"}, :node1}, or_set)
+    assert or_set.elements == MapSet.new([{"apple", "tag1"}])
+  end
+
+  test "apply_effect/2 removes elements by adding tags to tombstones" do
+    or_set = ORSet.new()
+    or_set = ORSet.add(or_set, "apple", "tag1")
+    or_set = ORSet.add(or_set, "banana", "tag2")
+    or_set = ORSet.add(or_set, "apple", "tag3")
+    {:ok, or_set} = ORSet.apply_effect({{:remove, MapSet.new(["tag1", "tag3"])}, :node1}, or_set)
+    assert or_set.tombstones == MapSet.new(["tag1", "tag3"])
+    assert ORSet.value(or_set) == MapSet.new(["banana"])
+  end
+
+  test "retrieve_value/1 returns the current set of elements" do
+    or_set = ORSet.new()
+    or_set = ORSet.add(or_set, "apple", "tag1")
+    assert ORSet.retrieve_value(or_set) == MapSet.new(["apple"])
+  end
+
+  test "generate_effect/2 for add operation" do
+    or_set = ORSet.new()
+    {:ok, effect} = ORSet.generate_effect({:add, "apple", "tag1"}, or_set)
+    assert effect == {:add, "apple", "tag1"}
+  end
+
+  test "generate_effect/2 for remove operation" do
+    or_set = ORSet.new()
+    or_set = ORSet.add(or_set, "apple", "tag1")
+    or_set = ORSet.add(or_set, "banana", "tag2")
+    {:ok, effect} = ORSet.generate_effect({:remove, "apple"}, or_set)
+    assert effect == {:remove, MapSet.new(["tag1"])}
+  end
+
+  test "requires_state_for_effect/1 returns false for add operation" do
+    assert ORSet.requires_state_for_effect({:add, "apple", "tag1"}) == false
+  end
+
+  test "requires_state_for_effect/1 returns true for remove operation" do
+    assert ORSet.requires_state_for_effect({:remove, "apple"}) == true
+  end
+
+  test "are_equal/2 compares two ORSets" do
+    or_set1 = ORSet.new()
+    or_set1 = ORSet.add(or_set1, "apple", "tag1")
+    or_set2 = ORSet.new()
+    or_set2 = ORSet.add(or_set2, "apple", "tag1")
+    assert ORSet.are_equal(or_set1, or_set2) == true
+
+    or_set3 = ORSet.new()
+    or_set3 = ORSet.add(or_set3, "banana", "tag2")
+    assert ORSet.are_equal(or_set1, or_set3) == false
+  end
 end
